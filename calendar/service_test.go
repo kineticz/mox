@@ -459,3 +459,41 @@ func TestUpdateRejectsUIDChangeWithoutOrphaningExceptions(t *testing.T) {
 		t.Fatalf("series split: master %q, exception %q", gotMaster.UID, gotException.UID)
 	}
 }
+
+func TestCreateRejectsStartEndTZIDMismatch(t *testing.T) {
+	acc := testAccount(t)
+	svc := Service{}
+	start := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC), TZID: "Europe/Berlin"}
+	end := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
+	_, err := svc.Create(testctx, acc, EventInput{Start: start, End: end})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v, expected %v", err, ErrInvalid)
+	}
+
+	end.TZID = "Europe/Berlin"
+	if _, err := svc.Create(testctx, acc, EventInput{Start: start, End: end}); err != nil {
+		t.Fatalf("matching TZID: %v", err)
+	}
+
+	_, err = svc.Create(testctx, acc, EventInput{
+		Start: icalendar.DateTime{UTC: start.UTC, Floating: true},
+		End:   icalendar.DateTime{UTC: end.UTC},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("floating mismatch: %v", err)
+	}
+}
+
+func TestCreateRejectsDuplicateMasterUID(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	svc := Service{}
+	_, err := svc.Create(testctx, acc, EventInput{UID: "dup@mox", Start: start, End: end})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(testctx, acc, EventInput{UID: "dup@mox", Start: start, End: end})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v, expected %v", err, ErrInvalid)
+	}
+}

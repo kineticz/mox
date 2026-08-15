@@ -71,17 +71,19 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 			if err != nil {
 				return err
 			}
-			if in.RecurrenceID != "" {
-				var master *store.CalendarEvent
-				for i := range series {
-					if series[i].RecurrenceID == "" {
-						master = &series[i]
-						break
-					}
+			var master *store.CalendarEvent
+			for i := range series {
+				if series[i].RecurrenceID == "" {
+					master = &series[i]
+					break
 				}
+			}
+			if in.RecurrenceID != "" {
 				if master == nil {
 					return fmt.Errorf("%w: exception requires an existing master", ErrInvalid)
 				}
+			} else if master != nil {
+				return fmt.Errorf("%w: master already exists", ErrInvalid)
 			}
 			existingExceptions, err := storedExceptionCount(series, 0)
 			if err != nil {
@@ -302,6 +304,12 @@ func validateInput(in EventInput) error {
 	}
 	if in.Start.DateOnly != in.End.DateOnly {
 		return fmt.Errorf("%w: start and end value types differ", ErrInvalid)
+	}
+	if in.Start.TZID != in.End.TZID {
+		return fmt.Errorf("%w: start and end TZID differ", ErrInvalid)
+	}
+	if in.Start.Floating != in.End.Floating {
+		return fmt.Errorf("%w: start and end floating differ", ErrInvalid)
 	}
 	if in.Start.DateOnly {
 		if in.End.UTC.Before(in.Start.UTC) {
