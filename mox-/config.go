@@ -95,6 +95,8 @@ type Config struct {
 
 	// Like AccountDestinationsLocked, but for aliases.
 	aliases map[string]config.Alias
+
+	Calendar config.CalendarFile
 }
 
 type AccountDestination struct {
@@ -490,7 +492,7 @@ func LoadConfig(ctx context.Context, log mlog.Log, doLoadTLSKeyCerts, checkACMEH
 // SetConfig sets a new config. Not to be used during normal operation.
 func SetConfig(c *Config) {
 	// Cannot just assign *c to Conf, it would copy the mutex.
-	Conf = Config{c.Static, sync.Mutex{}, c.Log, sync.Mutex{}, c.Dynamic, c.dynamicMtime, c.DynamicLastCheck, c.AccountDestinationsLocked, c.aliases}
+	Conf = Config{c.Static, sync.Mutex{}, c.Log, sync.Mutex{}, c.Dynamic, c.dynamicMtime, c.DynamicLastCheck, c.AccountDestinationsLocked, c.aliases, c.Calendar}
 
 	// If we have non-standard CA roots, use them for all HTTPS requests.
 	if Conf.Static.TLS.CertPool != nil {
@@ -545,6 +547,17 @@ func ParseConfig(ctx context.Context, log mlog.Log, p string, checkOnly, doLoadT
 
 	if !checkOnly {
 		c.allowACMEHosts(log, checkACMEHosts)
+	}
+
+	if cf, existed, err := LoadCalendarConfig(filepath.Dir(p)); err != nil {
+		errs = append(errs, err)
+	} else if existed {
+		ApplyCalendarDefaults(&cf)
+		if err := ValidateCalendarFile(cf); err != nil {
+			errs = append(errs, err)
+		} else {
+			c.Calendar = cf
+		}
 	}
 
 	return c, errs

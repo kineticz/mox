@@ -147,6 +147,7 @@ var commands = []struct {
 	{"config dnsrecords", cmdConfigDNSRecords},
 	{"config describe-domains", cmdConfigDescribeDomains},
 	{"config describe-static", cmdConfigDescribeStatic},
+	{"config describe-calendar", cmdConfigDescribeCalendar},
 	{"config account list", cmdConfigAccountList},
 	{"config account add", cmdConfigAccountAdd},
 	{"config account rm", cmdConfigAccountRemove},
@@ -647,6 +648,23 @@ may contain unfinished list items.
 
 	var sc config.Static
 	err := sconf.Describe(os.Stdout, &sc)
+	xcheckf(err, "describing config")
+}
+
+func cmdConfigDescribeCalendar(c *cmd) {
+	c.params = ">calendar.conf"
+	c.help = `Prints an annotated empty configuration for use as calendar.conf.
+
+The calendar configuration file is optional. If absent, calendar features are
+disabled. The calendar configuration file cannot be reloaded while mox is
+running. Mox has to be restarted for changes to take effect.
+`
+	if len(c.Parse()) != 0 {
+		c.Usage()
+	}
+
+	var cf config.CalendarFile
+	err := sconf.Describe(os.Stdout, &cf)
 	xcheckf(err, "describing config")
 }
 
