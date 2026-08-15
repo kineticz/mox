@@ -222,6 +222,17 @@ func (Service) Get(ctx context.Context, acc *store.Account, id int64) (ev store.
 	return ev, err
 }
 
+func (Service) Query(ctx context.Context, acc *store.Account, from, to time.Time) ([]Instance, error) {
+	if !mox.CalendarEnabled() {
+		return nil, ErrNotEnabled
+	}
+	maxTo := from.AddDate(0, 0, Limits().ExpansionHorizonDays)
+	if to.After(maxTo) {
+		to = maxTo
+	}
+	return query(ctx, acc, from, to)
+}
+
 func validateInput(in EventInput) error {
 	if in.Start.UTC.IsZero() || in.End.UTC.IsZero() {
 		return fmt.Errorf("%w: start and end are required", ErrInvalid)
