@@ -82,6 +82,9 @@ func TestParseErrors(t *testing.T) {
 		{"missing end", "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"},
 		{"mismatched end", "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n"},
 		{"data after end", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\nX:1\r\n"},
+		{"blank line after end", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n\r\n"},
+		{"whitespace line after end", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n \r\n"},
+		{"blank line then property after end", "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n\r\nX:1\r\n"},
 		{"empty name", "BEGIN:\r\nEND:VCALENDAR\r\n"},
 	}
 	for _, c := range cases {

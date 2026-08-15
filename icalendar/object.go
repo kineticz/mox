@@ -22,6 +22,9 @@ type Calendar struct {
 
 // Parse parses iCalendar data into a Calendar.
 func Parse(data []byte) (Calendar, error) {
+	if err := rejectTrailingAfterCalendarEnd(data); err != nil {
+		return Calendar{}, err
+	}
 	unfolded, err := Unfold(data)
 	if err != nil {
 		return Calendar{}, err
@@ -41,6 +44,56 @@ func Parse(data []byte) (Calendar, error) {
 		return Calendar{}, err
 	}
 	return p.cal, nil
+}
+
+func rejectTrailingAfterCalendarEnd(raw []byte) error {
+	lines, err := splitContentLines(raw)
+	if err != nil {
+		return err
+	}
+	var stack int
+	var inCal bool
+	var calClosed bool
+	for _, line := range lines {
+		if calClosed {
+			return fmt.Errorf("icalendar: data after END:VCALENDAR")
+		}
+		trimmed := bytes.TrimRight(line, "\r")
+		if len(bytes.TrimSpace(trimmed)) == 0 {
+			continue
+		}
+		if isBeginLine(trimmed) {
+			name, err := componentName(trimmed, "BEGIN")
+			if err != nil {
+				continue
+			}
+			if name == "VCALENDAR" {
+				inCal = true
+				continue
+			}
+			if inCal {
+				stack++
+			}
+			continue
+		}
+		if isEndLine(trimmed) {
+			name, err := componentName(trimmed, "END")
+			if err != nil {
+				continue
+			}
+			if name == "VCALENDAR" {
+				if !inCal || stack != 0 {
+					continue
+				}
+				calClosed = true
+				continue
+			}
+			if stack > 0 {
+				stack--
+			}
+		}
+	}
+	return nil
 }
 
 // Serialize returns the iCalendar representation of c.
@@ -95,10 +148,10 @@ func (p *parser) finish() error {
 
 func (p *parser) line(line []byte) error {
 	if p.done {
-		if len(bytes.TrimSpace(line)) == 0 {
-			return nil
-		}
 		return fmt.Errorf("icalendar: data after END:VCALENDAR")
+	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		return nil
 	}
 
 	if isBeginLine(line) {
@@ -176,7 +229,6 @@ func (p *parser) end(name string) error {
 }
 
 func splitContentLines(data []byte) ([][]byte, error) {
-	data = bytes.TrimRight(data, "\r\n")
 	if len(data) == 0 {
 		return nil, nil
 	}
@@ -189,9 +241,6 @@ func splitContentLines(data []byte) ([][]byte, error) {
 		}
 		line := bytes.TrimRight(data[:i], "\r")
 		data = data[i+1:]
-		if len(line) == 0 {
-			continue
-		}
 		lines = append(lines, line)
 	}
 	return lines, nil
