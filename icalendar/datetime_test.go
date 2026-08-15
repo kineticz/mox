@@ -28,6 +28,32 @@ func TestParseDateTimeBerlinDST(t *testing.T) {
 	}
 }
 
+func TestParseDateTimeBerlinOverlapUsesFirstOccurrence(t *testing.T) {
+	p := Property{Name: "DTSTART", Params: []Param{{Name: "TZID", Values: []string{"Europe/Berlin"}}}, Value: "20261025T023000"}
+	dt, err := ParseDateTime(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RFC 5545 section 3.3.5 requires the first occurrence, still at UTC+2.
+	want := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
+	if !dt.UTC.Equal(want) {
+		t.Fatalf("UTC = %s, want %s", dt.UTC, want)
+	}
+}
+
+func TestParseDateTimeBerlinGapUsesOffsetBeforeGap(t *testing.T) {
+	p := Property{Name: "DTSTART", Params: []Param{{Name: "TZID", Values: []string{"Europe/Berlin"}}}, Value: "20260329T023000"}
+	dt, err := ParseDateTime(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RFC 5545 section 3.3.5 requires the UTC+1 offset from before the gap.
+	want := time.Date(2026, 3, 29, 1, 30, 0, 0, time.UTC)
+	if !dt.UTC.Equal(want) {
+		t.Fatalf("UTC = %s, want %s", dt.UTC, want)
+	}
+}
+
 func TestParseDateOnly(t *testing.T) {
 	p := Property{Name: "DTSTART", Params: []Param{{Name: "VALUE", Values: []string{"DATE"}}}, Value: "20260101"}
 	dt, err := ParseDateTime(p)
