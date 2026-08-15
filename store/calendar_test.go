@@ -78,3 +78,47 @@ func TestNoCalendarWhenDisabled(t *testing.T) {
 	})
 	tcheck(t, err, "list calendars")
 }
+
+func TestEnsureDefaultCalendarExistingAccount(t *testing.T) {
+	log := mlog.New("store", nil)
+	os.RemoveAll("../testdata/store/data")
+	mox.ConfigStaticPath = filepath.FromSlash("../testdata/store/mox.conf")
+	mox.MustLoadConfig(true, false)
+	err := Init(ctxbg)
+	tcheck(t, err, "init")
+	defer func() {
+		err := Close()
+		tcheck(t, err, "close")
+	}()
+	defer Switchboard()()
+
+	acc, err := OpenAccount(log, "mjl", false)
+	tcheck(t, err, "open account with calendar disabled")
+	err = acc.Close()
+	tcheck(t, err, "close account with calendar disabled")
+	acc.WaitClosed()
+
+	mox.Conf.Calendar.EnableCalendar = true
+	acc, err = OpenAccount(log, "mjl", false)
+	tcheck(t, err, "reopen account with calendar enabled")
+	defer func() {
+		err = acc.Close()
+		tcheck(t, err, "closing account")
+		acc.WaitClosed()
+	}()
+
+	err = acc.DB.Read(ctxbg, func(tx *bstore.Tx) error {
+		list, err := bstore.QueryTx[Calendar](tx).List()
+		if err != nil {
+			return err
+		}
+		if len(list) != 1 {
+			t.Fatalf("default calendar count %d", len(list))
+		}
+		if list[0].Name != "Calendar" {
+			t.Fatalf("%#v", list[0])
+		}
+		return nil
+	})
+	tcheck(t, err, "list calendars")
+}
