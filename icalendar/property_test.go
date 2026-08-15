@@ -123,6 +123,74 @@ func TestPropertyWriteToRRULENoEscape(t *testing.T) {
 	}
 }
 
+func TestParsePropertyURINoUnescape(t *testing.T) {
+	cases := []struct {
+		line string
+		want string
+	}{
+		{`SOURCE:http://example.com/a,b;c\nd`, `http://example.com/a,b;c\nd`},
+		{`TZURL:http://tz.example.com/tz/America/New_York.ics`, `http://tz.example.com/tz/America/New_York.ics`},
+	}
+	for _, c := range cases {
+		p, err := ParseProperty([]byte(c.line))
+		if err != nil {
+			t.Fatalf("ParseProperty(%q): %v", c.line, err)
+		}
+		if p.Value != c.want {
+			t.Fatalf("ParseProperty(%q) value = %q, want %q", c.line, p.Value, c.want)
+		}
+	}
+}
+
+func TestPropertyWriteToURINoEscape(t *testing.T) {
+	for _, name := range []string{"SOURCE", "TZURL", "URL"} {
+		p := Property{Name: name, Value: "http://example.com/a,b;c\\d"}
+		var buf bytes.Buffer
+		if err := p.WriteTo(&buf); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.TrimSuffix(buf.String(), "\r\n")
+		want := name + `:http://example.com/a,b;c\d`
+		if got != want {
+			t.Fatalf("%s: got %q want %q", name, got, want)
+		}
+		if strings.Contains(got, `\,`) || strings.Contains(got, `\;`) {
+			t.Fatalf("%s: TEXT escapes in URI value: %q", name, got)
+		}
+	}
+}
+
+func TestPropertyExplicitValueTEXT(t *testing.T) {
+	p := Property{
+		Name:   "URL",
+		Params: []Param{{Name: "VALUE", Values: []string{"TEXT"}}},
+		Value:  "a;b",
+	}
+	var buf bytes.Buffer
+	if err := p.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `a\;b`) {
+		t.Fatalf("%q", buf.String())
+	}
+}
+
+func TestPropertyExplicitValueURINoEscape(t *testing.T) {
+	p := Property{
+		Name:   "DESCRIPTION",
+		Params: []Param{{Name: "VALUE", Values: []string{"URI"}}},
+		Value:  "http://x/a,b",
+	}
+	var buf bytes.Buffer
+	if err := p.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSuffix(buf.String(), "\r\n")
+	if strings.Contains(got, `\`) {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestParsePropertyMultiValueParam(t *testing.T) {
 	p, err := ParseProperty([]byte(`ATTENDEE;ROLE=CHAIR,REQ-PARTICIPANT:mailto:host@example.com`))
 	if err != nil {

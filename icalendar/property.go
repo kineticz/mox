@@ -176,21 +176,6 @@ func UnescapeText(s string) string {
 	return b.String()
 }
 
-func (p Property) textValue() bool {
-	if v, ok := p.Param("VALUE"); ok {
-		return strings.EqualFold(v, "TEXT")
-	}
-	switch p.Name {
-	case "ATTACH", "ATTENDEE", "COMPLETED", "CREATED", "DTEND", "DTSTAMP", "DTSTART", "DUE",
-		"DURATION", "EXDATE", "EXRULE", "FREEBUSY", "GEO", "LAST-MODIFIED", "ORGANIZER",
-		"PERCENT-COMPLETE", "PRIORITY", "RDATE", "RECURRENCE-ID", "REPEAT", "RRULE", "SEQUENCE",
-		"TRIGGER", "TZOFFSETFROM", "TZOFFSETTO", "URL":
-		return false
-	default:
-		return true
-	}
-}
-
 func validName(name string) bool {
 	if name == "" {
 		return false
