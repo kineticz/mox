@@ -26,3 +26,5 @@
 /upgrade*-verifydata.*.pprof
 /upgrade*-openaccounts.*.pprof
 /website/html/
+.worktrees/
+.superpowers/
