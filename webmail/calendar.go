@@ -107,39 +107,13 @@ func (Webmail) CalendarRespond(ctx context.Context, id int64, revision int64, pa
 		xcheckuserf(ctx, calendar.ErrNotEnabled, "responding to calendar event")
 	}
 
-	partStat = strings.ToUpper(partStat)
-	switch partStat {
-	case "ACCEPTED", "TENTATIVE", "DECLINED":
-	default:
-		xcheckuserf(ctx, calendar.ErrInvalid, "responding to calendar event")
-	}
-
 	ev, err := calendarSvc.Get(ctx, acc, id)
 	xcheckCalendar(ctx, err, "responding to calendar event")
-	if revision != ev.Revision {
-		xcheckuserf(ctx, calendar.ErrStale, "responding to calendar event")
-	}
 	if calendarAddressMatch(ev.Organizer, reqInfo.LoginAddress) {
 		xcheckuserf(ctx, errors.New("organizer cannot respond"), "responding to calendar event")
 	}
 
-	found := false
-	attendees := append([]store.CalendarAttendee(nil), ev.Attendees...)
-	for i := range attendees {
-		if calendarAddressMatch(attendees[i].Address, reqInfo.LoginAddress) {
-			attendees[i].PartStat = partStat
-			found = true
-			break
-		}
-	}
-	if !found {
-		xcheckuserf(ctx, errors.New("not an attendee"), "responding to calendar event")
-	}
-
-	in := eventInputFromStore(ev)
-	in.Revision = revision
-	in.Attendees = attendees
-	updated, err := calendarSvc.Update(ctx, acc, id, in)
+	updated, err := calendarSvc.Respond(ctx, acc, id, revision, reqInfo.LoginAddress, partStat)
 	xcheckCalendar(ctx, err, "responding to calendar event")
 	return eventToView(updated)
 }
@@ -228,6 +202,7 @@ func eventInputFromStore(ev store.CalendarEvent) calendar.EventInput {
 		Description:  ev.Description,
 		Location:     ev.Location,
 		Status:       ev.Status,
+		Class:        ev.Class,
 		Organizer:    ev.Organizer,
 		Start:        storeStartToDateTime(ev),
 		End:          storeEndToDateTime(ev),

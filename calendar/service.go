@@ -188,6 +188,69 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 	return ev, rerr
 }
 
+func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revision int64, attendeeAddress, partStat string) (ev store.CalendarEvent, rerr error) {
+	if !mox.CalendarEnabled() {
+		return ev, ErrNotEnabled
+	}
+	partStat = strings.ToUpper(partStat)
+	switch partStat {
+	case "ACCEPTED", "TENTATIVE", "DECLINED":
+	default:
+		return ev, ErrInvalid
+	}
+
+	acc.WithWLock(func() {
+		rerr = acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+			ev.ID = id
+			if err := tx.Get(&ev); err != nil {
+				return eventError(err)
+			}
+			if revision != ev.Revision {
+				return ErrStale
+			}
+
+			found := false
+			attendees := append([]store.CalendarAttendee(nil), ev.Attendees...)
+			for i := range attendees {
+				if calendarAddressMatch(attendees[i].Address, attendeeAddress) {
+					attendees[i].PartStat = partStat
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("%w: not an attendee", ErrInvalid)
+			}
+
+			unknown := unknownProperties(ev.ICS)
+			updated := ev
+			updated.Attendees = attendees
+			updated.LastModified = time.Now().UTC()
+			updated.Revision = ev.Revision + 1
+			var err error
+			updated.ICS, err = serializeEvent(updated, unknown)
+			if err != nil {
+				return err
+			}
+			if len(updated.ICS) > Limits().MaxICSBytes {
+				return fmt.Errorf("%w: ICS is too large", ErrLimit)
+			}
+			if err := tx.Update(&updated); err != nil {
+				return err
+			}
+			ev = updated
+			return nil
+		})
+	})
+	return ev, rerr
+}
+
+func calendarAddressMatch(a, b string) bool {
+	a = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a)), "mailto:")
+	b = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(b)), "mailto:")
+	return a == b
+}
+
 func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revision int64, wholeSeries bool) (rerr error) {
 	if !mox.CalendarEnabled() {
 		return ErrNotEnabled
