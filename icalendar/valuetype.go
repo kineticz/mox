@@ -29,6 +29,7 @@ const (
 //
 // ../rfc/5545:3.7,3.8
 // ../rfc/7986:5
+// ../rfc/9073:6
 var defaultPropertyValueType = map[string]valueType{
 	// RFC 5545 calendar properties — non-TEXT defaults only.
 	"ATTACH":           vtURI,
@@ -64,6 +65,9 @@ var defaultPropertyValueType = map[string]valueType{
 	"IMAGE":            vtURI,
 	"REFRESH-INTERVAL": vtDuration,
 	"SOURCE":           vtURI,
+
+	// RFC 9073 extensions.
+	"CALENDAR-ADDRESS": vtCalAddress,
 }
 
 func (p Property) valueType() valueType {
