@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -112,6 +113,38 @@ func (c Component) Prop(name string) (Property, bool) {
 		}
 	}
 	return Property{}, false
+}
+
+// UID returns the component UID property value, or "" if absent.
+func (c Component) UID() string {
+	p, ok := c.Prop("UID")
+	if !ok {
+		return ""
+	}
+	return p.Value
+}
+
+// RecurrenceID returns the RECURRENCE-ID property as a DateTime.
+func (c Component) RecurrenceID() (DateTime, bool, error) {
+	p, ok := c.Prop("RECURRENCE-ID")
+	if !ok {
+		return DateTime{}, false, nil
+	}
+	d, err := ParseDateTime(p)
+	return d, true, err
+}
+
+// Sequence returns the SEQUENCE property, or 0 if absent.
+func (c Component) Sequence() int {
+	p, ok := c.Prop("SEQUENCE")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(p.Value)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // Props returns all properties with the given name.
