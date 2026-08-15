@@ -43,45 +43,14 @@ func query(ctx context.Context, acc *store.Account, from, to time.Time) (instanc
 		if err != nil {
 			return err
 		}
-		overlappingExceptions, err := bstore.QueryTx[store.CalendarEvent](tx).
-			FilterNonzero(store.CalendarEvent{CalendarID: cal.ID}).
-			FilterNotEqual("RecurrenceID", "").
-			FilterLess("StartUTC", to).
-			FilterGreater("EndUTC", from).
-			List()
-		if err != nil {
-			return err
-		}
-		for _, ev := range overlappingExceptions {
-			instances = append(instances, eventInstance(ev, true))
-		}
-
-		exceptions := map[string]map[string]bool{}
-		if len(recurring) > 0 {
-			uids := make([]any, len(recurring))
-			for i, ev := range recurring {
-				uids[i] = ev.UID
-			}
-			seriesExceptions, err := bstore.QueryTx[store.CalendarEvent](tx).
-				FilterNonzero(store.CalendarEvent{CalendarID: cal.ID}).
-				FilterEqual("UID", uids...).
-				FilterNotEqual("RecurrenceID", "").
-				List()
-			if err != nil {
-				return err
-			}
-			for _, ev := range seriesExceptions {
-				if exceptions[ev.UID] == nil {
-					exceptions[ev.UID] = map[string]bool{}
-				}
-				exceptions[ev.UID][ev.RecurrenceID] = true
-			}
-		}
-
 		for _, ev := range nonRecurring {
 			instances = append(instances, eventInstance(ev, false))
 		}
+		var generated []Instance
+		recurrenceIDs := map[string]bool{}
+		recurringUIDs := map[string]bool{}
 		for _, ev := range recurring {
+			recurringUIDs[ev.UID] = true
 			recurrence, err := icalendar.ParseRRULE(ev.RRULE)
 			if err != nil {
 				return err
@@ -106,15 +75,58 @@ func query(ctx context.Context, acc *store.Account, from, to time.Time) (instanc
 				return err
 			}
 			for _, instanceStart := range starts {
-				if exceptions[ev.UID][instanceStart.Property("RECURRENCE-ID").Value] {
-					continue
-				}
 				instanceEnd := instanceStart
 				instanceEnd.UTC = instanceStart.UTC.Add(duration)
 				if overlaps(instanceStart.UTC, instanceEnd.UTC, from, to) {
-					instances = append(instances, Instance{Event: ev, Start: instanceStart, End: instanceEnd})
+					generated = append(generated, Instance{Event: ev, Start: instanceStart, End: instanceEnd})
+					recurrenceIDs[instanceStart.Property("RECURRENCE-ID").Value] = true
 				}
 			}
+		}
+
+		exceptions := map[string]map[string]bool{}
+		if len(recurrenceIDs) > 0 {
+			uids := make([]any, 0, len(recurringUIDs))
+			for uid := range recurringUIDs {
+				uids = append(uids, uid)
+			}
+			rids := make([]any, 0, len(recurrenceIDs))
+			for rid := range recurrenceIDs {
+				rids = append(rids, rid)
+			}
+			matchingExceptions, err := bstore.QueryTx[store.CalendarEvent](tx).
+				FilterNonzero(store.CalendarEvent{CalendarID: cal.ID}).
+				FilterEqual("UID", uids...).
+				FilterEqual("RecurrenceID", rids...).
+				List()
+			if err != nil {
+				return err
+			}
+			for _, ev := range matchingExceptions {
+				if exceptions[ev.UID] == nil {
+					exceptions[ev.UID] = map[string]bool{}
+				}
+				exceptions[ev.UID][ev.RecurrenceID] = true
+			}
+		}
+		for _, instance := range generated {
+			rid := instance.Start.Property("RECURRENCE-ID").Value
+			if !exceptions[instance.Event.UID][rid] {
+				instances = append(instances, instance)
+			}
+		}
+
+		overlappingExceptions, err := bstore.QueryTx[store.CalendarEvent](tx).
+			FilterNonzero(store.CalendarEvent{CalendarID: cal.ID}).
+			FilterNotEqual("RecurrenceID", "").
+			FilterLess("StartUTC", to).
+			FilterGreater("EndUTC", from).
+			List()
+		if err != nil {
+			return err
+		}
+		for _, ev := range overlappingExceptions {
+			instances = append(instances, eventInstance(ev, true))
 		}
 		return nil
 	})
