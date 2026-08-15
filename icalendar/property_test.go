@@ -49,7 +49,7 @@ func TestEscapeUnescapeText(t *testing.T) {
 }
 
 func TestPropertyWriteToFold(t *testing.T) {
-	val := strings.Repeat("a", 80)
+	val := strings.Repeat("a", 140)
 	p := Property{Name: "DESCRIPTION", Value: val}
 	var buf bytes.Buffer
 	if err := p.WriteTo(&buf); err != nil {
@@ -59,10 +59,9 @@ func TestPropertyWriteToFold(t *testing.T) {
 	if !bytes.Contains(out, []byte("\r\n ")) {
 		t.Fatalf("expected fold, got %q", out)
 	}
-	for _, line := range bytes.Split(out, []byte("\r\n")) {
-		line = bytes.TrimPrefix(line, []byte(" "))
+	for _, line := range bytes.Split(bytes.TrimSuffix(out, []byte("\r\n")), []byte("\r\n")) {
 		if len(line) > 75 {
-			t.Fatalf("line too long (%d): %q", len(line), line)
+			t.Fatalf("physical line too long (%d): %q", len(line), line)
 		}
 	}
 	unfolded, err := Unfold(out)
@@ -98,5 +97,121 @@ func TestPropertyWriteToNoEscapeCalAddress(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), `\`) {
 		t.Fatalf("%q", buf.String())
+	}
+}
+
+func TestParsePropertyRRULENoUnescape(t *testing.T) {
+	in := `RRULE:FREQ=WEEKLY;BYDAY=MO,TU`
+	p, err := ParseProperty([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Value != "FREQ=WEEKLY;BYDAY=MO,TU" {
+		t.Fatalf("got %q", p.Value)
+	}
+}
+
+func TestPropertyWriteToRRULENoEscape(t *testing.T) {
+	p := Property{Name: "RRULE", Value: "FREQ=WEEKLY;BYDAY=MO,TU"}
+	var buf bytes.Buffer
+	if err := p.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSuffix(buf.String(), "\r\n")
+	if got != "RRULE:FREQ=WEEKLY;BYDAY=MO,TU" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestParsePropertyMultiValueParam(t *testing.T) {
+	p, err := ParseProperty([]byte(`ATTENDEE;ROLE=CHAIR,REQ-PARTICIPANT:mailto:host@example.com`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, param := range p.Params {
+		if param.Name == "ROLE" {
+			if len(param.Values) != 2 || param.Values[0] != "CHAIR" || param.Values[1] != "REQ-PARTICIPANT" {
+				t.Fatalf("Values: %#v", param.Values)
+			}
+			return
+		}
+	}
+	t.Fatal("missing ROLE param")
+}
+
+func TestParsePropertyMultiValueQuotedParam(t *testing.T) {
+	p, err := ParseProperty([]byte(`ATTENDEE;MEMBER="mailto:a@example.com","mailto:b@example.com":mailto:host@example.com`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, param := range p.Params {
+		if param.Name == "MEMBER" {
+			if len(param.Values) != 2 || param.Values[0] != "mailto:a@example.com" || param.Values[1] != "mailto:b@example.com" {
+				t.Fatalf("Values: %#v", param.Values)
+			}
+			return
+		}
+	}
+	t.Fatal("missing MEMBER param")
+}
+
+func TestPropertyWriteToMultiValueParam(t *testing.T) {
+	p := Property{
+		Name: "ATTENDEE",
+		Params: []Param{{
+			Name:   "ROLE",
+			Values: []string{"CHAIR", "REQ-PARTICIPANT"},
+		}},
+		Value: "mailto:host@example.com",
+	}
+	var buf bytes.Buffer
+	if err := p.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSuffix(buf.String(), "\r\n")
+	want := "ATTENDEE;ROLE=CHAIR,REQ-PARTICIPANT:mailto:host@example.com"
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestParsePropertyQuotedParamBackslash(t *testing.T) {
+	p, err := ParseProperty([]byte(`ATTENDEE;CN="A\B":mailto:x@example.com`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cn, ok := p.Param("CN")
+	if !ok || cn != `A\B` {
+		t.Fatalf("CN: %q %v", cn, ok)
+	}
+}
+
+func TestPropertyWriteToQuotedParamBackslash(t *testing.T) {
+	p := Property{
+		Name:   "ATTENDEE",
+		Params: []Param{{Name: "CN", Values: []string{`A\B`}}},
+		Value:  "mailto:x@example.com",
+	}
+	var buf bytes.Buffer
+	if err := p.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSuffix(buf.String(), "\r\n")
+	want := `ATTENDEE;CN=A\B:mailto:x@example.com`
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestParsePropertyInvalidToken(t *testing.T) {
+	cases := []string{
+		`BAD NAME:value`,
+		`PROP;;P2=V:value`,
+		`PROP;=V:value`,
+	}
+	for _, c := range cases {
+		if _, err := ParseProperty([]byte(c)); err == nil {
+			t.Fatalf("expected error for %q", c)
+		}
 	}
 }

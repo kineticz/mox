@@ -24,37 +24,71 @@ type Property struct {
 //
 // ../rfc/5545:3.2
 func ParseProperty(line []byte) (Property, error) {
-	colon := indexUnquoted(line, ':')
-	if colon < 0 {
-		return Property{}, fmt.Errorf("icalendar: property without value")
+	line = bytes.TrimRight(line, "\r\n")
+	if len(line) == 0 {
+		return Property{}, fmt.Errorf("icalendar: empty property")
 	}
 
-	parts := splitUnquoted(line[:colon], ';')
-	if len(parts) == 0 || len(parts[0]) == 0 {
+	i := 0
+	nameStart := i
+	for i < len(line) && line[i] != ';' && line[i] != ':' {
+		i++
+	}
+	if nameStart == i {
 		return Property{}, fmt.Errorf("icalendar: empty property name")
 	}
-
-	prop := Property{
-		Name: strings.ToUpper(string(parts[0])),
+	name := strings.ToUpper(string(line[nameStart:i]))
+	if !validName(name) {
+		return Property{}, fmt.Errorf("icalendar: invalid property name")
 	}
-	for _, part := range parts[1:] {
-		if len(part) == 0 {
-			continue
+	prop := Property{Name: name}
+
+	for i < len(line) && line[i] == ';' {
+		i++
+		if i >= len(line) {
+			return Property{}, fmt.Errorf("icalendar: empty param")
 		}
-		eq := indexUnquoted(part, '=')
-		if eq < 0 {
-			return Property{}, fmt.Errorf("icalendar: param without value")
+		paramStart := i
+		for i < len(line) && line[i] != '=' {
+			if line[i] == ';' || line[i] == ':' {
+				return Property{}, fmt.Errorf("icalendar: param without value")
+			}
+			i++
 		}
-		name := strings.ToUpper(string(part[:eq]))
-		value, err := parseParamValue(part[eq+1:])
-		if err != nil {
-			return Property{}, err
+		if i >= len(line) || paramStart == i {
+			return Property{}, fmt.Errorf("icalendar: empty param name")
 		}
-		prop.Params = append(prop.Params, Param{Name: name, Values: []string{value}})
+		pname := strings.ToUpper(string(line[paramStart:i]))
+		if !validName(pname) {
+			return Property{}, fmt.Errorf("icalendar: invalid param name")
+		}
+		i++
+		valueStart := i
+		inQuote := false
+		for i < len(line) {
+			if line[i] == '"' {
+				inQuote = !inQuote
+				i++
+				continue
+			}
+			if !inQuote && (line[i] == ';' || line[i] == ':') {
+				break
+			}
+			i++
+		}
+		values := parseParamValue(line[valueStart:i])
+		prop.Params = append(prop.Params, Param{Name: pname, Values: values})
 	}
 
-	value := bytes.TrimRight(line[colon+1:], "\r\n")
-	prop.Value = UnescapeText(string(value))
+	if i >= len(line) || line[i] != ':' {
+		return Property{}, fmt.Errorf("icalendar: property without value")
+	}
+	rawValue := string(line[i+1:])
+	if prop.textValue() {
+		prop.Value = UnescapeText(rawValue)
+	} else {
+		prop.Value = rawValue
+	}
 	return prop, nil
 }
 
@@ -148,43 +182,89 @@ func (p Property) textValue() bool {
 	}
 	switch p.Name {
 	case "ATTACH", "ATTENDEE", "COMPLETED", "CREATED", "DTEND", "DTSTAMP", "DTSTART", "DUE",
-		"EXDATE", "FREEBUSY", "GEO", "LAST-MODIFIED", "ORGANIZER", "PERCENT-COMPLETE", "PRIORITY",
-		"RDATE", "RECURRENCE-ID", "SEQUENCE", "TRIGGER", "TZOFFSETFROM", "TZOFFSETTO", "URL":
+		"DURATION", "EXDATE", "EXRULE", "FREEBUSY", "GEO", "LAST-MODIFIED", "ORGANIZER",
+		"PERCENT-COMPLETE", "PRIORITY", "RDATE", "RECURRENCE-ID", "REPEAT", "RRULE", "SEQUENCE",
+		"TRIGGER", "TZOFFSETFROM", "TZOFFSETTO", "URL":
 		return false
 	default:
 		return true
 	}
 }
 
-func parseParamValue(b []byte) (string, error) {
-	if len(b) >= 2 && b[0] == '"' && b[len(b)-1] == '"' {
-		return unescapeQuotedParam(string(b[1 : len(b)-1])), nil
+func validName(name string) bool {
+	if name == "" {
+		return false
 	}
-	return string(b), nil
-}
-
-func unescapeQuotedParam(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) {
-			b.WriteByte(s[i+1])
-			i++
+	rest := name
+	if strings.HasPrefix(name, "X-") {
+		rest = name[2:]
+		if rest == "" {
+			return false
+		}
+	}
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		if c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' {
 			continue
 		}
-		b.WriteByte(s[i])
+		return false
 	}
-	return b.String()
+	return true
+}
+
+func parseParamValue(b []byte) []string {
+	return splitParamValuesBytes(b)
+}
+
+func splitParamValuesBytes(b []byte) []string {
+	if len(b) == 0 {
+		return []string{""}
+	}
+	var values []string
+	for len(b) > 0 {
+		if b[0] == '"' {
+			end := 1
+			for end < len(b) {
+				if b[end] == '"' {
+					values = append(values, string(b[1:end]))
+					end++
+					break
+				}
+				end++
+			}
+			b = b[end:]
+			if len(b) > 0 && b[0] == ',' {
+				b = b[1:]
+			}
+			continue
+		}
+		i := 0
+		for i < len(b) && b[i] != ',' {
+			i++
+		}
+		values = append(values, string(b[:i]))
+		if i < len(b) {
+			b = b[i+1:]
+		} else {
+			break
+		}
+	}
+	return values
 }
 
 func formatParamValue(param Param) string {
 	if len(param.Values) == 0 {
 		return `""`
 	}
-	v := param.Values[0]
-	if paramNeedsQuote(v) {
-		return `"` + escapeQuotedParam(v) + `"`
+	parts := make([]string, len(param.Values))
+	for i, v := range param.Values {
+		if paramNeedsQuote(v) {
+			parts[i] = `"` + v + `"`
+		} else {
+			parts[i] = v
+		}
 	}
-	return v
+	return strings.Join(parts, ",")
 }
 
 func paramNeedsQuote(s string) bool {
@@ -197,75 +277,28 @@ func paramNeedsQuote(s string) bool {
 	return false
 }
 
-func escapeQuotedParam(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' || s[i] == '"' {
-			b.WriteByte('\\')
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
 func writeFolded(w io.Writer, line []byte) error {
+	first := true
 	for start := 0; start < len(line); {
-		end := start + 75
+		limit := 75
+		if !first {
+			limit = 74
+		}
+		end := start + limit
 		if end > len(line) {
 			end = len(line)
+		}
+		if !first {
+			if _, err := w.Write([]byte("\r\n ")); err != nil {
+				return err
+			}
 		}
 		if _, err := w.Write(line[start:end]); err != nil {
 			return err
 		}
 		start = end
-		if start < len(line) {
-			if _, err := w.Write([]byte("\r\n ")); err != nil {
-				return err
-			}
-		}
+		first = false
 	}
 	_, err := w.Write([]byte("\r\n"))
 	return err
-}
-
-func indexUnquoted(b []byte, sep byte) int {
-	inQuote := false
-	for i := 0; i < len(b); i++ {
-		switch b[i] {
-		case '"':
-			inQuote = !inQuote
-		case '\\':
-			if inQuote && i+1 < len(b) {
-				i++
-			}
-		default:
-			if !inQuote && b[i] == sep {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-func splitUnquoted(b []byte, sep byte) [][]byte {
-	var parts [][]byte
-	start := 0
-	inQuote := false
-	for i := 0; i < len(b); i++ {
-		switch b[i] {
-		case '"':
-			inQuote = !inQuote
-		case '\\':
-			if inQuote && i+1 < len(b) {
-				i++
-			}
-		default:
-			if !inQuote && b[i] == sep {
-				parts = append(parts, b[start:i])
-				start = i + 1
-			}
-		}
-	}
-	parts = append(parts, b[start:])
-	return parts
 }
