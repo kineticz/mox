@@ -241,10 +241,8 @@ func Expand(dtstart DateTime, r Recurrence, rdates, exdates []DateTime, from, to
 		limitLocal := to.In(loc)
 		endDate := dateAtUTC(limitLocal.Year(), limitLocal.Month(), limitLocal.Day()).AddDate(0, 0, 1)
 		generated := 1
-		if r.Until == nil || !beyondUntil(dtstart, startDate, r) {
-			if err := add(dtstart); err != nil {
-				return nil, err
-			}
+		if err := add(dtstart); err != nil {
+			return nil, err
 		}
 		for date := startDate.AddDate(0, 0, 1); date.Before(endDate) && (r.Count == 0 || generated < r.Count); date = date.AddDate(0, 0, 1) {
 			if !matchesRecurrenceDate(date, startDate, r) {
@@ -324,11 +322,11 @@ func matchesRecurrenceDate(date, start time.Time, r Recurrence) bool {
 		}
 		return matchesMonthFilters(date, start, r)
 	case "YEARLY":
-		if (date.Year()-start.Year())%r.Interval != 0 || date.Month() != start.Month() {
+		if (date.Year()-start.Year())%r.Interval != 0 {
 			return false
 		}
 		if len(r.ByMonthDay) == 0 {
-			return date.Day() == start.Day()
+			return date.Month() == start.Month() && date.Day() == start.Day()
 		}
 		return matchesMonthDay(date, r.ByMonthDay)
 	}

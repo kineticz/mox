@@ -152,6 +152,21 @@ func TestExpandRDATEUnionAndDateOnlyEXDATE(t *testing.T) {
 	}
 }
 
+func TestExpandIncludesDTSTARTWhenUntilPredatesIt(t *testing.T) {
+	start := DateTime{UTC: time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)}
+	r, err := ParseRRULE("FREQ=DAILY;UNTIL=20260104T090000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Expand(start, r, nil, nil, start.UTC.Add(-time.Hour), start.UTC.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].UTC.Equal(start.UTC) {
+		t.Fatalf("%#v", got)
+	}
+}
+
 func TestExpandMonthlyByMonthDayAndYearly(t *testing.T) {
 	start := DateTime{UTC: time.Date(2026, 1, 31, 9, 0, 0, 0, time.UTC)}
 	monthly, err := ParseRRULE("FREQ=MONTHLY;BYMONTHDAY=31;COUNT=3")
@@ -170,11 +185,12 @@ func TestExpandMonthlyByMonthDayAndYearly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err = Expand(start, yearly, nil, nil, start.UTC, time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC), 10)
+	got, err = Expand(start, yearly, nil, nil, start.UTC, time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[1].UTC.Day() != 30 || got[1].UTC.Year() != 2027 {
+	want := time.Date(2026, 3, 30, 9, 0, 0, 0, time.UTC)
+	if len(got) != 2 || !got[1].UTC.Equal(want) {
 		t.Fatalf("%#v", got)
 	}
 }
