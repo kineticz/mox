@@ -318,3 +318,135 @@ func TestDeleteStaleAndNoOutbox(t *testing.T) {
 		t.Fatalf("calendar mutation wrote %d outbox rows", outgoing)
 	}
 }
+
+func TestRejectUnknownCanonicalAndStructuralProperties(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	svc := Service{}
+
+	for _, property := range []icalendar.Property{
+		{Name: "UID", Value: "override@mox"},
+		{Name: "ATTENDEE", Value: "bypass@example.com"},
+		{Name: "EXDATE", Value: "20260816T090000Z"},
+		{Name: "BEGIN", Value: "VALARM"},
+		{Name: "BAD NAME", Value: "invalid"},
+	} {
+		_, err := svc.Create(testctx, acc, EventInput{
+			UID: "canonical@mox", Start: start, End: end,
+			Unknown: []icalendar.Property{property},
+		})
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("property %#v: got %v, expected %v", property, err, ErrInvalid)
+		}
+	}
+}
+
+func TestExceptionLimitCountsCommaSeparatedValues(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	mox.Conf.Calendar.MaxExceptions = 2
+
+	_, err := (Service{}).Create(testctx, acc, EventInput{
+		UID:   "many-exdates@mox",
+		Start: start,
+		End:   end,
+		EXDATE: []string{
+			"20260816T090000Z,20260817T090000Z,20260818T090000Z",
+		},
+	})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("got %v, expected %v", err, ErrLimit)
+	}
+}
+
+func TestRecurrenceComplexityLimitsCreateAndUpdate(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	svc := Service{}
+	mox.Conf.Calendar.MaxRecurrenceInstances = 3
+	mox.Conf.Calendar.ExpansionHorizonDays = 30
+
+	for _, tc := range []struct {
+		name string
+		in   EventInput
+	}{
+		{
+			name: "count",
+			in: EventInput{
+				Start: start, End: end, RRULE: "FREQ=DAILY;COUNT=4",
+			},
+		},
+		{
+			name: "rrule expansion",
+			in: EventInput{
+				Start: start, End: end, RRULE: "FREQ=DAILY",
+			},
+		},
+		{
+			name: "rdate expansion",
+			in: EventInput{
+				Start: start, End: end,
+				RDATE: []string{"20260816T090000Z,20260817T090000Z,20260818T090000Z"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.Create(testctx, acc, tc.in); !errors.Is(err, ErrLimit) {
+				t.Fatalf("got %v, expected %v", err, ErrLimit)
+			}
+		})
+	}
+
+	mox.Conf.Calendar.MaxRecurrenceInstances = 10
+	ev, err := svc.Create(testctx, acc, EventInput{UID: "update-limit@mox", Start: start, End: end})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mox.Conf.Calendar.MaxRecurrenceInstances = 3
+	_, err = svc.Update(testctx, acc, ev.ID, EventInput{
+		UID: ev.UID, Revision: ev.Revision, Start: start, End: end,
+		RRULE: "FREQ=DAILY;COUNT=4",
+	})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("update got %v, expected %v", err, ErrLimit)
+	}
+}
+
+func TestUpdateRejectsUIDChangeWithoutOrphaningExceptions(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	svc := Service{}
+	master, err := svc.Create(testctx, acc, EventInput{
+		UID: "immutable@mox", Start: start, End: end, RRULE: "FREQ=DAILY;COUNT=2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exception, err := svc.Create(testctx, acc, EventInput{
+		UID: "immutable@mox", RecurrenceID: "20260816T090000Z",
+		Start: icalendar.DateTime{UTC: start.UTC.AddDate(0, 0, 1)},
+		End:   icalendar.DateTime{UTC: end.UTC.AddDate(0, 0, 1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Update(testctx, acc, master.ID, EventInput{
+		UID: "replacement@mox", Revision: master.Revision,
+		Start: start, End: end, RRULE: master.RRULE,
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v, expected %v", err, ErrInvalid)
+	}
+	gotMaster, err := svc.Get(testctx, acc, master.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotException, err := svc.Get(testctx, acc, exception.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMaster.UID != "immutable@mox" || gotException.UID != gotMaster.UID {
+		t.Fatalf("series split: master %q, exception %q", gotMaster.UID, gotException.UID)
+	}
+}

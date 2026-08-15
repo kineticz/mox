@@ -82,10 +82,16 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 				if master == nil {
 					return fmt.Errorf("%w: exception requires an existing master", ErrInvalid)
 				}
-				if exceptionCount(series)+len(master.EXDATE)+1 > Limits().MaxExceptions {
-					return fmt.Errorf("%w: too many exceptions", ErrLimit)
-				}
-			} else if len(in.EXDATE)+exceptionCount(series) > Limits().MaxExceptions {
+			}
+			existingExceptions, err := storedExceptionCount(series, 0)
+			if err != nil {
+				return err
+			}
+			inputExceptions, err := inputExceptionCount(in)
+			if err != nil {
+				return err
+			}
+			if existingExceptions+inputExceptions > Limits().MaxExceptions {
 				return fmt.Errorf("%w: too many exceptions", ErrLimit)
 			}
 
@@ -128,6 +134,8 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 			}
 			if in.UID == "" {
 				in.UID = ev.UID
+			} else if in.UID != ev.UID {
+				return fmt.Errorf("%w: UID cannot be changed", ErrInvalid)
 			}
 			if in.RecurrenceID == "" && ev.RecurrenceID != "" {
 				in.RecurrenceID = ev.RecurrenceID
@@ -140,19 +148,15 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 			if err != nil {
 				return err
 			}
-			exceptions := exceptionCountExcept(series, ev.ID)
-			masterEXDATE := 0
-			for _, item := range series {
-				if item.ID != ev.ID && item.RecurrenceID == "" {
-					masterEXDATE = len(item.EXDATE)
-				}
+			existingExceptions, err := storedExceptionCount(series, ev.ID)
+			if err != nil {
+				return err
 			}
-			if in.RecurrenceID == "" {
-				masterEXDATE = len(in.EXDATE)
-			} else {
-				exceptions++
+			inputExceptions, err := inputExceptionCount(in)
+			if err != nil {
+				return err
 			}
-			if masterEXDATE+exceptions > Limits().MaxExceptions {
+			if existingExceptions+inputExceptions > Limits().MaxExceptions {
 				return fmt.Errorf("%w: too many exceptions", ErrLimit)
 			}
 
@@ -235,14 +239,13 @@ func validateInput(in EventInput) error {
 	if len(in.Attendees) > Limits().MaxAttendees {
 		return fmt.Errorf("%w: too many attendees", ErrLimit)
 	}
-	if in.RRULE != "" {
-		if _, err := icalendar.ParseRRULE(in.RRULE); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
+	if err := validateRecurrence(in); err != nil {
+		return err
 	}
 	for _, p := range in.Unknown {
-		if strings.EqualFold(p.Name, "VTODO") || strings.EqualFold(p.Name, "BEGIN") && strings.EqualFold(p.Value, "VTODO") {
-			return fmt.Errorf("%w: VTODO is not supported", ErrInvalid)
+		name := strings.ToUpper(p.Name)
+		if canonicalProperty[name] || name == "BEGIN" || name == "END" {
+			return fmt.Errorf("%w: property %s is not an extra VEVENT property", ErrInvalid, p.Name)
 		}
 		for _, param := range p.Params {
 			for _, value := range param.Values {
@@ -251,6 +254,41 @@ func validateInput(in EventInput) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateRecurrence(in EventInput) error {
+	var recurrence icalendar.Recurrence
+	var err error
+	if in.RRULE != "" {
+		recurrence, err = icalendar.ParseRRULE(in.RRULE)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		if recurrence.Count > Limits().MaxRecurrenceInstances {
+			return fmt.Errorf("%w: recurrence COUNT is too large", ErrLimit)
+		}
+	}
+	rdates, err := parseDateValues("RDATE", in.RDATE)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	exdates, err := parseDateValues("EXDATE", in.EXDATE)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if in.RRULE == "" && len(rdates) == 0 {
+		return nil
+	}
+	limits := Limits()
+	to := in.Start.UTC.AddDate(0, 0, limits.ExpansionHorizonDays)
+	_, err = icalendar.Expand(in.Start, recurrence, rdates, exdates, in.Start.UTC, to, limits.MaxRecurrenceInstances)
+	if errors.Is(err, icalendar.ErrExpansionLimit) {
+		return fmt.Errorf("%w: recurrence expansion is too large", ErrLimit)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return nil
 }
@@ -321,6 +359,10 @@ func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property) ([]byt
 	}
 	props = append(props, unknown...)
 	full := icalendar.Calendar{Components: []icalendar.Component{{Name: "VEVENT", Properties: props}}}.Serialize()
+	parsed, err := icalendar.Parse(full)
+	if err != nil || len(parsed.Components) != 1 || parsed.Components[0].Name != "VEVENT" || len(parsed.Components[0].Components) != 0 {
+		return nil, fmt.Errorf("%w: invalid serialized VEVENT", ErrInvalid)
+	}
 	const prefix = "BEGIN:VCALENDAR\r\n"
 	const suffix = "END:VCALENDAR\r\n"
 	if !strings.HasPrefix(string(full), prefix) || !strings.HasSuffix(string(full), suffix) {
@@ -336,19 +378,20 @@ func unknownProperties(ics []byte) []icalendar.Property {
 	if err != nil || len(cal.Components) != 1 {
 		return nil
 	}
-	known := map[string]bool{
-		"UID": true, "RECURRENCE-ID": true, "SEQUENCE": true, "SUMMARY": true,
-		"DESCRIPTION": true, "LOCATION": true, "STATUS": true, "CLASS": true,
-		"ORGANIZER": true, "DTSTART": true, "DTEND": true, "RRULE": true,
-		"RDATE": true, "EXDATE": true, "ATTENDEE": true,
-	}
 	var unknown []icalendar.Property
 	for _, p := range cal.Components[0].Properties {
-		if !known[p.Name] {
+		if !canonicalProperty[p.Name] {
 			unknown = append(unknown, p)
 		}
 	}
 	return unknown
+}
+
+var canonicalProperty = map[string]bool{
+	"UID": true, "RECURRENCE-ID": true, "SEQUENCE": true, "SUMMARY": true,
+	"DESCRIPTION": true, "LOCATION": true, "STATUS": true, "CLASS": true,
+	"ORGANIZER": true, "DTSTART": true, "DTEND": true, "RRULE": true,
+	"RDATE": true, "EXDATE": true, "ATTENDEE": true,
 }
 
 func newUID() (string, error) {
@@ -363,18 +406,52 @@ func eventsByUID(tx *bstore.Tx, uid string) ([]store.CalendarEvent, error) {
 	return bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).List()
 }
 
-func exceptionCount(events []store.CalendarEvent) int {
-	return exceptionCountExcept(events, 0)
-}
-
-func exceptionCountExcept(events []store.CalendarEvent, exceptID int64) int {
+func storedExceptionCount(events []store.CalendarEvent, exceptID int64) (int, error) {
 	n := 0
 	for _, ev := range events {
-		if ev.ID != exceptID && ev.RecurrenceID != "" {
+		if ev.ID == exceptID {
+			continue
+		}
+		if ev.RecurrenceID != "" {
 			n++
 		}
+		exdates, err := parseDateValues("EXDATE", ev.EXDATE)
+		if err != nil {
+			return 0, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		n += len(exdates)
 	}
-	return n
+	return n, nil
+}
+
+func inputExceptionCount(in EventInput) (int, error) {
+	exdates, err := parseDateValues("EXDATE", in.EXDATE)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	n := len(exdates)
+	if in.RecurrenceID != "" {
+		n++
+	}
+	return n, nil
+}
+
+func parseDateValues(name string, values []string) ([]icalendar.DateTime, error) {
+	var dates []icalendar.DateTime
+	for _, list := range values {
+		for _, value := range strings.Split(list, ",") {
+			p := icalendar.Property{Name: name, Value: value}
+			if len(value) == len("20060102") {
+				p.Params = []icalendar.Param{{Name: "VALUE", Values: []string{"DATE"}}}
+			}
+			date, err := icalendar.ParseDateTime(p)
+			if err != nil {
+				return nil, err
+			}
+			dates = append(dates, date)
+		}
+	}
+	return dates, nil
 }
 
 func eventError(err error) error {
