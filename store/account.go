@@ -950,6 +950,8 @@ var DBTypes = []any{
 	RulesetNoMailbox{},
 	Annotation{},
 	MessageErase{},
+	Calendar{},
+	CalendarEvent{},
 }
 
 // Account holds the information about a user, includings mailboxes, messages, imap subscriptions.
@@ -1230,6 +1232,12 @@ func OpenAccountDB(log mlog.Log, accountDir, accountName string) (a *Account, re
 			}
 		} else if err != nil {
 			return err
+		}
+
+		if mox.CalendarEnabled() {
+			if err := ensureDefaultCalendar(tx); err != nil {
+				return err
+			}
 		}
 
 		var erase []MessageErase
@@ -1661,6 +1669,11 @@ func initAccount(db *bstore.DB) error {
 		}
 		if err := tx.Insert(&Settings{ID: 1}); err != nil {
 			return err
+		}
+		if mox.CalendarEnabled() {
+			if err := ensureDefaultCalendar(tx); err != nil {
+				return err
+			}
 		}
 
 		modseq, err := nextModSeq(tx)
