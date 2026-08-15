@@ -532,6 +532,39 @@ export interface ChangeMailboxKeywords {
 	Keywords?: string[] | null
 }
 
+export interface CalendarEventView {
+	ID: number
+	UID: string
+	RecurrenceID: string
+	Sequence: number
+	Revision: number
+	Summary: string
+	Description: string
+	Location: string
+	Status: string
+	Organizer: string
+	Start: CalendarTime
+	End: CalendarTime
+	RRULE: string
+	RDATE?: string[] | null
+	EXDATE?: string[] | null
+	Attendees?: CalendarAttendeeView[] | null
+	InstanceStart?: CalendarTime | null
+}
+
+export interface CalendarTime {
+	Instant: Date
+	TZID: string
+	DateOnly: boolean
+}
+
+export interface CalendarAttendeeView {
+	Address: string
+	Name: string
+	Role: string
+	PartStat: string
+}
+
 // IMAP UID.
 export type UID = number
 
@@ -608,7 +641,7 @@ export enum Quoting {
 	Top = "top",
 }
 
-export const structTypes: {[typename: string]: boolean} = {"Address":true,"Attachment":true,"ChangeMailboxAdd":true,"ChangeMailboxCounts":true,"ChangeMailboxKeywords":true,"ChangeMailboxRemove":true,"ChangeMailboxRename":true,"ChangeMailboxSpecialUse":true,"ChangeMsgAdd":true,"ChangeMsgFlags":true,"ChangeMsgRemove":true,"ChangeMsgThread":true,"ComposeMessage":true,"Domain":true,"DomainAddressConfig":true,"Envelope":true,"EventStart":true,"EventViewChanges":true,"EventViewErr":true,"EventViewMsgs":true,"EventViewReset":true,"File":true,"Filter":true,"Flags":true,"ForwardAttachments":true,"FromAddressSettings":true,"Mailbox":true,"Message":true,"MessageAddress":true,"MessageEnvelope":true,"MessageItem":true,"NotFilter":true,"Page":true,"ParsedMessage":true,"Part":true,"Query":true,"RecipientSecurity":true,"Request":true,"Ruleset":true,"Settings":true,"SpecialUse":true,"SubmitMessage":true}
+export const structTypes: {[typename: string]: boolean} = {"Address":true,"Attachment":true,"CalendarAttendeeView":true,"CalendarEventView":true,"CalendarTime":true,"ChangeMailboxAdd":true,"ChangeMailboxCounts":true,"ChangeMailboxKeywords":true,"ChangeMailboxRemove":true,"ChangeMailboxRename":true,"ChangeMailboxSpecialUse":true,"ChangeMsgAdd":true,"ChangeMsgFlags":true,"ChangeMsgRemove":true,"ChangeMsgThread":true,"ComposeMessage":true,"Domain":true,"DomainAddressConfig":true,"Envelope":true,"EventStart":true,"EventViewChanges":true,"EventViewErr":true,"EventViewMsgs":true,"EventViewReset":true,"File":true,"Filter":true,"Flags":true,"ForwardAttachments":true,"FromAddressSettings":true,"Mailbox":true,"Message":true,"MessageAddress":true,"MessageEnvelope":true,"MessageItem":true,"NotFilter":true,"Page":true,"ParsedMessage":true,"Part":true,"Query":true,"RecipientSecurity":true,"Request":true,"Ruleset":true,"Settings":true,"SpecialUse":true,"SubmitMessage":true}
 export const stringsTypes: {[typename: string]: boolean} = {"AttachmentType":true,"CSRFToken":true,"Localpart":true,"Quoting":true,"SecurityResult":true,"ThreadMode":true,"ViewMode":true}
 export const intsTypes: {[typename: string]: boolean} = {"ModSeq":true,"UID":true,"Validation":true}
 export const types: TypenameMap = {
@@ -654,6 +687,9 @@ export const types: TypenameMap = {
 	"ChangeMailboxSpecialUse": {"Name":"ChangeMailboxSpecialUse","Docs":"","Fields":[{"Name":"MailboxID","Docs":"","Typewords":["int64"]},{"Name":"MailboxName","Docs":"","Typewords":["string"]},{"Name":"SpecialUse","Docs":"","Typewords":["SpecialUse"]},{"Name":"ModSeq","Docs":"","Typewords":["ModSeq"]}]},
 	"SpecialUse": {"Name":"SpecialUse","Docs":"","Fields":[{"Name":"Archive","Docs":"","Typewords":["bool"]},{"Name":"Draft","Docs":"","Typewords":["bool"]},{"Name":"Junk","Docs":"","Typewords":["bool"]},{"Name":"Sent","Docs":"","Typewords":["bool"]},{"Name":"Trash","Docs":"","Typewords":["bool"]}]},
 	"ChangeMailboxKeywords": {"Name":"ChangeMailboxKeywords","Docs":"","Fields":[{"Name":"MailboxID","Docs":"","Typewords":["int64"]},{"Name":"MailboxName","Docs":"","Typewords":["string"]},{"Name":"Keywords","Docs":"","Typewords":["[]","string"]}]},
+	"CalendarEventView": {"Name":"CalendarEventView","Docs":"","Fields":[{"Name":"ID","Docs":"","Typewords":["int64"]},{"Name":"UID","Docs":"","Typewords":["string"]},{"Name":"RecurrenceID","Docs":"","Typewords":["string"]},{"Name":"Sequence","Docs":"","Typewords":["int32"]},{"Name":"Revision","Docs":"","Typewords":["int64"]},{"Name":"Summary","Docs":"","Typewords":["string"]},{"Name":"Description","Docs":"","Typewords":["string"]},{"Name":"Location","Docs":"","Typewords":["string"]},{"Name":"Status","Docs":"","Typewords":["string"]},{"Name":"Organizer","Docs":"","Typewords":["string"]},{"Name":"Start","Docs":"","Typewords":["CalendarTime"]},{"Name":"End","Docs":"","Typewords":["CalendarTime"]},{"Name":"RRULE","Docs":"","Typewords":["string"]},{"Name":"RDATE","Docs":"","Typewords":["[]","string"]},{"Name":"EXDATE","Docs":"","Typewords":["[]","string"]},{"Name":"Attendees","Docs":"","Typewords":["[]","CalendarAttendeeView"]},{"Name":"InstanceStart","Docs":"","Typewords":["nullable","CalendarTime"]}]},
+	"CalendarTime": {"Name":"CalendarTime","Docs":"","Fields":[{"Name":"Instant","Docs":"","Typewords":["timestamp"]},{"Name":"TZID","Docs":"","Typewords":["string"]},{"Name":"DateOnly","Docs":"","Typewords":["bool"]}]},
+	"CalendarAttendeeView": {"Name":"CalendarAttendeeView","Docs":"","Fields":[{"Name":"Address","Docs":"","Typewords":["string"]},{"Name":"Name","Docs":"","Typewords":["string"]},{"Name":"Role","Docs":"","Typewords":["string"]},{"Name":"PartStat","Docs":"","Typewords":["string"]}]},
 	"UID": {"Name":"UID","Docs":"","Values":null},
 	"ModSeq": {"Name":"ModSeq","Docs":"","Values":null},
 	"Validation": {"Name":"Validation","Docs":"","Values":[{"Name":"ValidationUnknown","Value":0,"Docs":""},{"Name":"ValidationStrict","Value":1,"Docs":""},{"Name":"ValidationDMARC","Value":2,"Docs":""},{"Name":"ValidationRelaxed","Value":3,"Docs":""},{"Name":"ValidationPass","Value":4,"Docs":""},{"Name":"ValidationNeutral","Value":5,"Docs":""},{"Name":"ValidationTemperror","Value":6,"Docs":""},{"Name":"ValidationPermerror","Value":7,"Docs":""},{"Name":"ValidationFail","Value":8,"Docs":""},{"Name":"ValidationSoftfail","Value":9,"Docs":""},{"Name":"ValidationNone","Value":10,"Docs":""}]},
@@ -709,6 +745,9 @@ export const parser = {
 	ChangeMailboxSpecialUse: (v: any) => parse("ChangeMailboxSpecialUse", v) as ChangeMailboxSpecialUse,
 	SpecialUse: (v: any) => parse("SpecialUse", v) as SpecialUse,
 	ChangeMailboxKeywords: (v: any) => parse("ChangeMailboxKeywords", v) as ChangeMailboxKeywords,
+	CalendarEventView: (v: any) => parse("CalendarEventView", v) as CalendarEventView,
+	CalendarTime: (v: any) => parse("CalendarTime", v) as CalendarTime,
+	CalendarAttendeeView: (v: any) => parse("CalendarAttendeeView", v) as CalendarAttendeeView,
 	UID: (v: any) => parse("UID", v) as UID,
 	ModSeq: (v: any) => parse("ModSeq", v) as ModSeq,
 	Validation: (v: any) => parse("Validation", v) as Validation,
@@ -1078,6 +1117,62 @@ export class Client {
 		const returnTypes: string[][] = [["EventStart"],["EventViewErr"],["EventViewReset"],["EventViewMsgs"],["EventViewChanges"],["ChangeMsgAdd"],["ChangeMsgRemove"],["ChangeMsgFlags"],["ChangeMsgThread"],["ChangeMailboxRemove"],["ChangeMailboxAdd"],["ChangeMailboxRename"],["ChangeMailboxCounts"],["ChangeMailboxSpecialUse"],["ChangeMailboxKeywords"],["Flags"]]
 		const params: any[] = []
 		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as [EventStart, EventViewErr, EventViewReset, EventViewMsgs, EventViewChanges, ChangeMsgAdd, ChangeMsgRemove, ChangeMsgFlags, ChangeMsgThread, ChangeMailboxRemove, ChangeMailboxAdd, ChangeMailboxRename, ChangeMailboxCounts, ChangeMailboxSpecialUse, ChangeMailboxKeywords, Flags]
+	}
+
+	async CalendarEnabled(): Promise<boolean> {
+		const fn: string = "CalendarEnabled"
+		const paramTypes: string[][] = []
+		const returnTypes: string[][] = [["bool"]]
+		const params: any[] = []
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as boolean
+	}
+
+	async CalendarQuery(from0: Date, to: Date): Promise<CalendarEventView[] | null> {
+		const fn: string = "CalendarQuery"
+		const paramTypes: string[][] = [["timestamp"],["timestamp"]]
+		const returnTypes: string[][] = [["[]","CalendarEventView"]]
+		const params: any[] = [from0, to]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as CalendarEventView[] | null
+	}
+
+	async CalendarGet(id: number): Promise<CalendarEventView> {
+		const fn: string = "CalendarGet"
+		const paramTypes: string[][] = [["int64"]]
+		const returnTypes: string[][] = [["CalendarEventView"]]
+		const params: any[] = [id]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as CalendarEventView
+	}
+
+	async CalendarCreate(e: CalendarEventView): Promise<CalendarEventView> {
+		const fn: string = "CalendarCreate"
+		const paramTypes: string[][] = [["CalendarEventView"]]
+		const returnTypes: string[][] = [["CalendarEventView"]]
+		const params: any[] = [e]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as CalendarEventView
+	}
+
+	async CalendarUpdate(e: CalendarEventView): Promise<CalendarEventView> {
+		const fn: string = "CalendarUpdate"
+		const paramTypes: string[][] = [["CalendarEventView"]]
+		const returnTypes: string[][] = [["CalendarEventView"]]
+		const params: any[] = [e]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as CalendarEventView
+	}
+
+	async CalendarDelete(id: number, revision: number, wholeSeries: boolean): Promise<void> {
+		const fn: string = "CalendarDelete"
+		const paramTypes: string[][] = [["int64"],["int64"],["bool"]]
+		const returnTypes: string[][] = []
+		const params: any[] = [id, revision, wholeSeries]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as void
+	}
+
+	async CalendarRespond(id: number, revision: number, partStat: string): Promise<CalendarEventView> {
+		const fn: string = "CalendarRespond"
+		const paramTypes: string[][] = [["int64"],["int64"],["string"]]
+		const returnTypes: string[][] = [["CalendarEventView"]]
+		const params: any[] = [id, revision, partStat]
+		return await _sherpaCall(this.baseURL, this.authState, { ...this.options }, paramTypes, returnTypes, fn, params) as CalendarEventView
 	}
 }
 

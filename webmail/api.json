@@ -750,6 +750,163 @@
 					]
 				}
 			]
+		},
+		{
+			"Name": "CalendarEnabled",
+			"Docs": "",
+			"Params": [],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"bool"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarQuery",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "from",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "to",
+					"Typewords": [
+						"timestamp"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"[]",
+						"CalendarEventView"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarGet",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarCreate",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "e",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarUpdate",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "e",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarDelete",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "revision",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "wholeSeries",
+					"Typewords": [
+						"bool"
+					]
+				}
+			],
+			"Returns": []
+		},
+		{
+			"Name": "CalendarRespond",
+			"Docs": "",
+			"Params": [
+				{
+					"Name": "id",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "revision",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "partStat",
+					"Typewords": [
+						"string"
+					]
+				}
+			],
+			"Returns": [
+				{
+					"Name": "r0",
+					"Typewords": [
+						"CalendarEventView"
+					]
+				}
+			]
 		}
 	],
 	"Sections": [],
@@ -3372,6 +3529,196 @@
 					"Docs": "",
 					"Typewords": [
 						"[]",
+						"string"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarEventView",
+			"Docs": "",
+			"Fields": [
+				{
+					"Name": "ID",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "UID",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "RecurrenceID",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Sequence",
+					"Docs": "",
+					"Typewords": [
+						"int32"
+					]
+				},
+				{
+					"Name": "Revision",
+					"Docs": "",
+					"Typewords": [
+						"int64"
+					]
+				},
+				{
+					"Name": "Summary",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Description",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Location",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Status",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Organizer",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Start",
+					"Docs": "",
+					"Typewords": [
+						"CalendarTime"
+					]
+				},
+				{
+					"Name": "End",
+					"Docs": "",
+					"Typewords": [
+						"CalendarTime"
+					]
+				},
+				{
+					"Name": "RRULE",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "RDATE",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "EXDATE",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"string"
+					]
+				},
+				{
+					"Name": "Attendees",
+					"Docs": "",
+					"Typewords": [
+						"[]",
+						"CalendarAttendeeView"
+					]
+				},
+				{
+					"Name": "InstanceStart",
+					"Docs": "",
+					"Typewords": [
+						"nullable",
+						"CalendarTime"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarTime",
+			"Docs": "",
+			"Fields": [
+				{
+					"Name": "Instant",
+					"Docs": "",
+					"Typewords": [
+						"timestamp"
+					]
+				},
+				{
+					"Name": "TZID",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "DateOnly",
+					"Docs": "",
+					"Typewords": [
+						"bool"
+					]
+				}
+			]
+		},
+		{
+			"Name": "CalendarAttendeeView",
+			"Docs": "",
+			"Fields": [
+				{
+					"Name": "Address",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Name",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "Role",
+					"Docs": "",
+					"Typewords": [
+						"string"
+					]
+				},
+				{
+					"Name": "PartStat",
+					"Docs": "",
+					"Typewords": [
 						"string"
 					]
 				}
