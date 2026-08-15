@@ -244,6 +244,9 @@ func validateInput(in EventInput) error {
 	}
 	for _, p := range in.Unknown {
 		name := strings.ToUpper(p.Name)
+		if !validPropertyName(p.Name) {
+			return fmt.Errorf("%w: invalid property name %q", ErrInvalid, p.Name)
+		}
 		if canonicalProperty[name] || name == "BEGIN" || name == "END" {
 			return fmt.Errorf("%w: property %s is not an extra VEVENT property", ErrInvalid, p.Name)
 		}
@@ -278,12 +281,26 @@ func validateRecurrence(in EventInput) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if in.RRULE == "" && len(rdates) == 0 {
+	limits := Limits()
+	if len(rdates) > limits.MaxRecurrenceInstances {
+		return fmt.Errorf("%w: too many RDATE values", ErrLimit)
+	}
+	if recurrence.Count > 0 && recurrence.Count+len(rdates) > limits.MaxRecurrenceInstances {
+		return fmt.Errorf("%w: recurrence set is too large", ErrLimit)
+	}
+	if in.RRULE == "" {
 		return nil
 	}
-	limits := Limits()
 	to := in.Start.UTC.AddDate(0, 0, limits.ExpansionHorizonDays)
-	_, err = icalendar.Expand(in.Start, recurrence, rdates, exdates, in.Start.UTC, to, limits.MaxRecurrenceInstances)
+	expandRDates := rdates
+	expandMax := limits.MaxRecurrenceInstances
+	if recurrence.Freq != "" && recurrence.Count == 0 {
+		// Every RDATE counts against the cap, including values outside the
+		// expansion horizon. Expand only the rule with the remaining budget.
+		expandRDates = nil
+		expandMax -= len(rdates)
+	}
+	_, err = icalendar.Expand(in.Start, recurrence, expandRDates, exdates, in.Start.UTC, to, expandMax)
 	if errors.Is(err, icalendar.ErrExpansionLimit) {
 		return fmt.Errorf("%w: recurrence expansion is too large", ErrLimit)
 	}
@@ -358,10 +375,14 @@ func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property) ([]byt
 		props = append(props, p)
 	}
 	props = append(props, unknown...)
+	intendedNames := propertyNameCounts(props)
 	full := icalendar.Calendar{Components: []icalendar.Component{{Name: "VEVENT", Properties: props}}}.Serialize()
 	parsed, err := icalendar.Parse(full)
 	if err != nil || len(parsed.Components) != 1 || parsed.Components[0].Name != "VEVENT" || len(parsed.Components[0].Components) != 0 {
 		return nil, fmt.Errorf("%w: invalid serialized VEVENT", ErrInvalid)
+	}
+	if !samePropertyNames(intendedNames, propertyNameCounts(parsed.Components[0].Properties)) {
+		return nil, fmt.Errorf("%w: serialized VEVENT properties changed", ErrInvalid)
 	}
 	const prefix = "BEGIN:VCALENDAR\r\n"
 	const suffix = "END:VCALENDAR\r\n"
@@ -392,6 +413,39 @@ var canonicalProperty = map[string]bool{
 	"DESCRIPTION": true, "LOCATION": true, "STATUS": true, "CLASS": true,
 	"ORGANIZER": true, "DTSTART": true, "DTEND": true, "RRULE": true,
 	"RDATE": true, "EXDATE": true, "ATTENDEE": true,
+}
+
+func validPropertyName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func propertyNameCounts(properties []icalendar.Property) map[string]int {
+	counts := map[string]int{}
+	for _, p := range properties {
+		counts[strings.ToUpper(p.Name)]++
+	}
+	return counts
+}
+
+func samePropertyNames(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, count := range a {
+		if b[name] != count {
+			return false
+		}
+	}
+	return true
 }
 
 func newUID() (string, error) {

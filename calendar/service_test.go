@@ -330,6 +330,8 @@ func TestRejectUnknownCanonicalAndStructuralProperties(t *testing.T) {
 		{Name: "EXDATE", Value: "20260816T090000Z"},
 		{Name: "BEGIN", Value: "VALARM"},
 		{Name: "BAD NAME", Value: "invalid"},
+		{Name: "X:ok\r\nUID", Value: "injected@mox"},
+		{Name: "X:ok\r\nEXDATE", Value: "20260816T090000Z"},
 	} {
 		_, err := svc.Create(testctx, acc, EventInput{
 			UID: "canonical@mox", Start: start, End: end,
@@ -386,7 +388,14 @@ func TestRecurrenceComplexityLimitsCreateAndUpdate(t *testing.T) {
 			name: "rdate expansion",
 			in: EventInput{
 				Start: start, End: end,
-				RDATE: []string{"20260816T090000Z,20260817T090000Z,20260818T090000Z"},
+				RDATE: []string{"20260816T090000Z,20260817T090000Z,20260818T090000Z,20260819T090000Z"},
+			},
+		},
+		{
+			name: "rdates outside horizon",
+			in: EventInput{
+				Start: start, End: end,
+				RDATE: []string{"20360816T090000Z,20360817T090000Z,20360818T090000Z,20360819T090000Z"},
 			},
 		},
 	} {
