@@ -63,6 +63,7 @@ any parameters. Followed by the help and usage information for each command.
 	mox config dnsrecords domain
 	mox config describe-domains >domains.conf
 	mox config describe-static >mox.conf
+	mox config describe-calendar >calendar.conf
 	mox config account list
 	mox config account add account address
 	mox config account rm account
@@ -954,6 +955,16 @@ This configuration file needs modifications to make it valid. For example, it
 may contain unfinished list items.
 
 	usage: mox config describe-static >mox.conf
+
+# mox config describe-calendar
+
+Prints an annotated empty configuration for use as calendar.conf.
+
+The calendar configuration file is optional. If absent, calendar features are
+disabled. The calendar configuration file cannot be reloaded while mox is
+running. Mox has to be restarted for changes to take effect.
+
+	usage: mox config describe-calendar >calendar.conf
 
 # mox config account list
 

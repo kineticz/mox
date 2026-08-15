@@ -45,10 +45,11 @@ cat <<EOF
 /*
 Package config holds the configuration file definitions.
 
-Mox uses two config files:
+Mox uses two required config files, and an optional third:
 
 1. mox.conf, also called the static configuration file.
 2. domains.conf, also called the dynamic configuration file.
+3. calendar.conf, optional calendar configuration.
 
 The static configuration file is never reloaded during the lifetime of a
 running mox instance. After changes to mox.conf, mox must be restarted for the
@@ -88,6 +89,13 @@ cat <<EOF
 
 EOF
 ./mox config describe-domains | sed 's/^/	/'
+
+cat <<EOF
+
+# calendar.conf
+
+EOF
+./mox config describe-calendar | sed 's/^/	/'
 
 cat <<EOF
 

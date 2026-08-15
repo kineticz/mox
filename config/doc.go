@@ -1,10 +1,11 @@
 /*
 Package config holds the configuration file definitions.
 
-Mox uses two config files:
+Mox uses two required config files, and an optional third:
 
 1. mox.conf, also called the static configuration file.
 2. domains.conf, also called the dynamic configuration file.
+3. calendar.conf, optional calendar configuration.
 
 The static configuration file is never reloaded during the lifetime of a
 running mox instance. After changes to mox.conf, mox must be restarted for the
@@ -1530,6 +1531,45 @@ See https://pkg.go.dev/github.com/mjl-/sconf for details.
 	# bl.spamcop.net. (optional)
 	MonitorDNSBLs:
 		-
+
+# calendar.conf
+
+	# Enable the server-side calendar store, calendar JSON API and default per-account
+	# calendar. Default: false. (optional)
+	EnableCalendar: false
+
+	# Enable CalDAV. Requires EnableCalendar. Default: false. Unused in phase 1.
+	# (optional)
+	EnableCalDAV: false
+
+	# Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false.
+	# Unused in phase 1. (optional)
+	EnableIMIP: false
+
+	# Enable the ScheduledMessage service and virtual IMAP Scheduled mailbox. Default:
+	# false. Unused in phase 1. (optional)
+	EnableScheduled: false
+
+	# Maximum iCalendar input size in bytes. Default: 1048576 (1 MiB). (optional)
+	MaxICSBytes: 0
+
+	# Maximum VEVENT components per calendar object. Default: 64. (optional)
+	MaxComponents: 0
+
+	# Maximum ATTENDEE properties per event. Default: 64. (optional)
+	MaxAttendees: 0
+
+	# Maximum exception instances (RECURRENCE-ID rows plus EXDATE values) per series.
+	# Default: 256. (optional)
+	MaxExceptions: 0
+
+	# Maximum expanded instances returned for one series in one query. Default: 520.
+	# (optional)
+	MaxRecurrenceInstances: 0
+
+	# Maximum days a recurrence may be expanded from the query start. Default: 730.
+	# (optional)
+	ExpansionHorizonDays: 0
 
 # Examples
 

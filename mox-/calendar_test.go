@@ -1,13 +1,16 @@
 package mox
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/mlog"
+	"github.com/mjl-/sconf"
 )
 
 func TestLoadCalendarConfigAbsent(t *testing.T) {
@@ -59,6 +62,16 @@ func TestValidateCalendarFileCalDAVRequiresCalendar(t *testing.T) {
 	err := ValidateCalendarFile(config.CalendarFile{EnableCalDAV: true})
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestDescribeCalendarDoesNotAffectStatic(t *testing.T) {
+	var buf bytes.Buffer
+	if err := sconf.Describe(&buf, &config.CalendarFile{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "EnableCalendar") {
+		t.Fatalf("describe: %s", buf.String())
 	}
 }
 
