@@ -122,9 +122,13 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 			if err := tx.Insert(&ev); err != nil {
 				return err
 			}
+			if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+				return err
+			}
 			return bumpCalendarCTag(tx, acc)
 		})
 	})
+	flushAfterMutation(ctx, acc, rerr)
 	return ev, rerr
 }
 
@@ -193,13 +197,21 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 				return err
 			}
 			ev = updated
+			if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+				return err
+			}
 			return bumpCalendarCTag(tx, acc)
 		})
 	})
+	flushAfterMutation(ctx, acc, rerr)
 	return ev, rerr
 }
 
-func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revision int64, attendeeAddress, partStat string) (ev store.CalendarEvent, rerr error) {
+func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revision int64, attendeeAddress, partStat string) (store.CalendarEvent, error) {
+	return respond(ctx, acc, id, revision, attendeeAddress, partStat, true)
+}
+
+func respond(ctx context.Context, acc *store.Account, id int64, revision int64, attendeeAddress, partStat string, enqueue bool) (ev store.CalendarEvent, rerr error) {
 	if !mox.CalendarEnabled() {
 		return ev, ErrNotEnabled
 	}
@@ -251,9 +263,17 @@ func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revisi
 				return err
 			}
 			ev = updated
+			if enqueue {
+				if err := enqueueOutbox(tx, "REPLY", ev); err != nil {
+					return err
+				}
+			}
 			return bumpCalendarCTag(tx, acc)
 		})
 	})
+	if enqueue {
+		flushAfterMutation(ctx, acc, rerr)
+	}
 	return ev, rerr
 }
 
@@ -282,6 +302,9 @@ func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revisio
 				return ErrStale
 			}
 			if wholeSeries || ev.RecurrenceID == "" {
+				if err := enqueueCancelForUID(tx, ev); err != nil {
+					return err
+				}
 				_, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: ev.UID}).Delete()
 				if err != nil {
 					return err
@@ -294,6 +317,7 @@ func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revisio
 			return bumpCalendarCTag(tx, acc)
 		})
 	})
+	flushAfterMutation(ctx, acc, rerr)
 	return rerr
 }
 
@@ -371,7 +395,11 @@ func (Service) ListObjects(ctx context.Context, acc *store.Account) ([]CalendarO
 	return objs, err
 }
 
-func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ics []byte, ifMatch string) (obj CalendarObject, rerr error) {
+func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ics []byte, ifMatch string) (CalendarObject, error) {
+	return putObject(ctx, acc, uid, ics, ifMatch, true)
+}
+
+func putObject(ctx context.Context, acc *store.Account, uid string, ics []byte, ifMatch string, enqueue bool) (obj CalendarObject, rerr error) {
 	if !mox.CalendarEnabled() {
 		return obj, ErrNotEnabled
 	}
@@ -464,6 +492,13 @@ func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ic
 				}
 				inserted = append(inserted, ev)
 			}
+			if enqueue {
+				for _, ev := range inserted {
+					if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+						return err
+					}
+				}
+			}
 			if err := bumpCalendarCTag(tx, acc); err != nil {
 				return err
 			}
@@ -471,10 +506,17 @@ func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ic
 			return nil
 		})
 	})
+	if enqueue {
+		flushAfterMutation(ctx, acc, rerr)
+	}
 	return obj, rerr
 }
 
-func (Service) DeleteObject(ctx context.Context, acc *store.Account, uid string, ifMatch string) (rerr error) {
+func (Service) DeleteObject(ctx context.Context, acc *store.Account, uid string, ifMatch string) error {
+	return deleteObject(ctx, acc, uid, ifMatch, true)
+}
+
+func deleteObject(ctx context.Context, acc *store.Account, uid string, ifMatch string, enqueue bool) (rerr error) {
 	if !mox.CalendarEnabled() {
 		return ErrNotEnabled
 	}
@@ -493,12 +535,22 @@ func (Service) DeleteObject(ctx context.Context, acc *store.Account, uid string,
 			if ifMatch != "" && ifMatch != objectETag(events) {
 				return ErrStale
 			}
+			if enqueue {
+				for _, ev := range events {
+					if err := enqueueOutbox(tx, "CANCEL", ev); err != nil {
+						return err
+					}
+				}
+			}
 			if _, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).Delete(); err != nil {
 				return err
 			}
 			return bumpCalendarCTag(tx, acc)
 		})
 	})
+	if enqueue {
+		flushAfterMutation(ctx, acc, rerr)
+	}
 	return rerr
 }
 

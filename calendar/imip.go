@@ -81,7 +81,7 @@ func applyRequest(ctx context.Context, acc *store.Account, cal icalendar.Calenda
 		}
 	}
 
-	if _, err := (Service{}).PutObject(ctx, acc, uid, cal.Serialize(), ""); err != nil {
+	if _, err := putObject(ctx, acc, uid, cal.Serialize(), "", false); err != nil {
 		if applyUserError(err) {
 			return record("ignored-mismatch")
 		}
@@ -115,7 +115,7 @@ func applyReply(ctx context.Context, acc *store.Account, vevents []icalendar.Com
 	if seq < master.Sequence {
 		return record("ignored-stale")
 	}
-	if _, err := (Service{}).Respond(ctx, acc, master.ID, master.Revision, addr, partStat); err != nil {
+	if _, err := respond(ctx, acc, master.ID, master.Revision, addr, partStat, false); err != nil {
 		if applyUserError(err) {
 			return record("ignored-mismatch")
 		}
@@ -138,7 +138,7 @@ func applyCancel(ctx context.Context, acc *store.Account, vevents []icalendar.Co
 	if seq < maxSequence(existing) {
 		return record("ignored-stale")
 	}
-	err = (Service{}).DeleteObject(ctx, acc, uid, "")
+	err = deleteObject(ctx, acc, uid, "", false)
 	if applyUserError(err) {
 		return record("ignored-mismatch")
 	}
