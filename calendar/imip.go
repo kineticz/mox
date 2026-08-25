@@ -3,11 +3,16 @@ package calendar
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/mjl-/bstore"
 
 	"github.com/mjl-/mox/icalendar"
+	"github.com/mjl-/mox/message"
+	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
 	"github.com/mjl-/mox/store"
 )
@@ -16,6 +21,79 @@ type IncomingMeta struct {
 	MailFrom         string
 	MsgFrom          string
 	MsgFromValidated bool
+}
+
+// ProcessIncomingMail walks a delivered message for text/calendar parts and
+// applies each with ApplyIncoming. Errors are logged; the return value must be
+// ignored by SMTP so delivery is never rolled back.
+//
+// ../rfc/6047:2.4 iMIP uses text/calendar in email
+// ../rfc/5546 iTIP methods REQUEST, REPLY, CANCEL
+func ProcessIncomingMail(ctx context.Context, log mlog.Log, acc *store.Account, m *store.Message, msgFile *os.File) error {
+	if !mox.IMIPEnabled() {
+		return nil
+	}
+
+	var r io.ReaderAt = msgFile
+	if len(m.MsgPrefix) > 0 {
+		r = store.FileMsgReader(m.MsgPrefix, msgFile)
+	}
+	p, err := message.Parse(log.Logger, false, r)
+	if err != nil {
+		log.Infox("parsing incoming mail for calendar", err)
+		return nil
+	}
+	if err := p.Walk(log.Logger, nil); err != nil {
+		log.Infox("walking incoming mail parts for calendar", err)
+	}
+
+	meta := IncomingMeta{
+		MailFrom:         m.MailFrom,
+		MsgFromValidated: m.MsgFromValidated,
+	}
+	if m.MsgFromLocalpart != "" || m.MsgFromDomain != "" {
+		meta.MsgFrom = m.MsgFromLocalpart.String() + "@" + m.MsgFromDomain
+	}
+
+	applyIncomingParts(ctx, log, acc, &p, meta)
+	return nil
+}
+
+func applyIncomingParts(ctx context.Context, log mlog.Log, acc *store.Account, p *message.Part, meta IncomingMeta) {
+	if strings.EqualFold(p.MediaType, "TEXT") && strings.EqualFold(p.MediaSubType, "CALENDAR") {
+		applyIncomingPart(ctx, log, acc, p, meta)
+	}
+	for i := range p.Parts {
+		applyIncomingParts(ctx, log, acc, &p.Parts[i], meta)
+	}
+}
+
+func applyIncomingPart(ctx context.Context, log mlog.Log, acc *store.Account, p *message.Part, meta IncomingMeta) {
+	max := int64(Limits().MaxICSBytes)
+	if p.DecodedSize > max {
+		log.Info("skipping calendar part larger than MaxICSBytes", slog.Int64("size", p.DecodedSize), slog.Int64("limit", max))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(p.Reader(), max+1))
+	if err != nil {
+		log.Infox("reading calendar part", err)
+		return
+	}
+	if int64(len(body)) > max {
+		log.Info("skipping calendar part larger than MaxICSBytes", slog.Int("size", len(body)), slog.Int64("limit", max))
+		return
+	}
+	cal, err := icalendar.Parse(body)
+	if err != nil {
+		log.Infox("parsing calendar part", err)
+		return
+	}
+	result, err := ApplyIncoming(ctx, acc, cal, meta)
+	if err != nil {
+		log.Infox("applying incoming calendar", err)
+		return
+	}
+	log.Debug("applied incoming calendar part", slog.String("result", result))
 }
 
 func ApplyIncoming(ctx context.Context, acc *store.Account, cal icalendar.Calendar, meta IncomingMeta) (result string, err error) {

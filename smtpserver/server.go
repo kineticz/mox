@@ -39,6 +39,7 @@ import (
 
 	"github.com/mjl-/bstore"
 
+	"github.com/mjl-/mox/calendar"
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dkim"
 	"github.com/mjl-/mox/dmarc"
@@ -3593,6 +3594,10 @@ func (c *conn) deliver(ctx context.Context, recvHdrFor func(string) string, msgW
 				} else {
 					err = queue.Incoming(context.Background(), log, a.d.acc, messageID, *a.d.m, part, a.mailbox)
 					log.Check(err, "queueing webhook for incoming delivery")
+				}
+				// After WithWLock: ApplyIncoming takes its own account lock. Never fail SMTP.
+				if err := calendar.ProcessIncomingMail(context.Background(), log, a.d.acc, a.d.m, dataFile); err != nil {
+					log.Errorx("processing incoming calendar mail", err)
 				}
 			} else if nerr > 0 && ndelivered == 0 {
 				// Don't continue if we had an error and haven't delivered yet. If we only had
