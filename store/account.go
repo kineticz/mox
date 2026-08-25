@@ -952,6 +952,8 @@ var DBTypes = []any{
 	MessageErase{},
 	Calendar{},
 	CalendarEvent{},
+	CalendarOutbox{},
+	CalendarInbound{},
 }
 
 // Account holds the information about a user, includings mailboxes, messages, imap subscriptions.

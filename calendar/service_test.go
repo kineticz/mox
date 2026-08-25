@@ -651,3 +651,21 @@ func TestUpdateDoesNotEmitDURATIONWithDTEND(t *testing.T) {
 		t.Fatalf("both DURATION and DTEND:\n%s", got.ICS)
 	}
 }
+
+func TestCalendarOutboxUniqueIdempotencyKey(t *testing.T) {
+	acc := testAccount(t)
+	row := store.CalendarOutbox{Method: "REQUEST", UID: "u@mox", Recipient: "a@b", ICS: []byte("BEGIN:VEVENT\r\nEND:VEVENT\r\n"), IdempotencyKey: "REQUEST|u@mox|0|a@b"}
+	if err := acc.DB.Write(testctx, func(tx *bstore.Tx) error {
+		return tx.Insert(&row)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dup := row
+	dup.ID = 0
+	err := acc.DB.Write(testctx, func(tx *bstore.Tx) error {
+		return tx.Insert(&dup)
+	})
+	if err == nil {
+		t.Fatal("expected unique error")
+	}
+}

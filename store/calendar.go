@@ -52,6 +52,28 @@ type CalendarEvent struct {
 	ICS          []byte `bstore:"nonzero"`
 }
 
+type CalendarOutbox struct {
+	ID             int64
+	Method         string `bstore:"nonzero"` // REQUEST, REPLY, CANCEL
+	UID            string `bstore:"nonzero"`
+	Sequence       int
+	Recipient      string `bstore:"nonzero"` // mailto or addr
+	ICS            []byte `bstore:"nonzero"`
+	IdempotencyKey string `bstore:"nonzero,unique"`
+	Created        time.Time `bstore:"default now"`
+	Queued         bool
+}
+
+type CalendarInbound struct {
+	ID        int64
+	MessageID int64 // store.Message.ID; 0 in unit tests
+	Method    string
+	UID       string
+	Sequence  int
+	Result    string // applied, ignored-stale, ignored-duplicate, ignored-mismatch, conflict
+	Created   time.Time `bstore:"default now"`
+}
+
 func (a *Account) DefaultCalendar(tx *bstore.Tx) (Calendar, error) {
 	return bstore.QueryTx[Calendar](tx).Limit(1).Get()
 }
