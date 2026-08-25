@@ -1538,8 +1538,7 @@ See https://pkg.go.dev/github.com/mjl-/sconf for details.
 	# calendar. Default: false. (optional)
 	EnableCalendar: false
 
-	# Enable CalDAV. Requires EnableCalendar. Default: false. Unused in phase 1.
-	# (optional)
+	# Enable CalDAV. Requires EnableCalendar. Default: false. (optional)
 	EnableCalDAV: false
 
 	# Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false.

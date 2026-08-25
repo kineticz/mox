@@ -105,6 +105,8 @@ func (h handler) serve(w http.ResponseWriter, r *http.Request) {
 		h.serveDelete(w, r, res)
 	case "PROPFIND":
 		h.propfind(w, r, acc, res)
+	case "REPORT":
+		h.serveReport(w, r, acc, res)
 	default:
 		http.NotFound(w, r)
 	}

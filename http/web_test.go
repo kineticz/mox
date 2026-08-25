@@ -46,6 +46,7 @@ func TestServeHTTP(t *testing.T) {
 
 	test("GET", "http://mta-sts.mox.example/.well-known/mta-sts.txt", http.StatusOK, "version: STSv1\nmode: enforce\nmax_age: 86400\nmx: mox.example\n", nil)
 	test("GET", "http://mox.example/.well-known/mta-sts.txt", http.StatusNotFound, "", nil) // mta-sts endpoint not in this domain.
+	test("GET", "http://mox.example/.well-known/caldav", http.StatusNotFound, "", nil)      // CalDAV off (no calendar.conf).
 	test("GET", "http://mta-sts.mox.example/static/", http.StatusNotFound, "", nil)         // static not served on this domain.
 	test("GET", "http://mta-sts.mox.example/other", http.StatusNotFound, "", nil)
 	test("GET", "http://mox.example/static/", http.StatusOK, "html\n", map[string]string{"X-Test": "mox"}) // index.html is served

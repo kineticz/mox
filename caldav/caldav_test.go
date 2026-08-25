@@ -341,3 +341,91 @@ func TestPutGetDeleteObjectUIDMismatch(t *testing.T) {
 		t.Fatalf("uid mismatch put got %d body %q", rec.Code, rec.Body.String())
 	}
 }
+
+func report(t *testing.T, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("REPORT", path, strings.NewReader(body))
+	req.SetBasicAuth("mjl@mox.example", "test1234")
+	req.Header.Set("Content-Type", "application/xml")
+	req.Header.Set("Depth", "1")
+	Handler(false).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestReport(t *testing.T) {
+	setupCalDAV(t, true, true)
+
+	put := func(uid, dtstart, dtend string) {
+		t.Helper()
+		ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:" + uid + "\r\nDTSTART:" + dtstart + "\r\nDTEND:" + dtend + "\r\nSUMMARY:" + uid + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+		path := "/mjl/calendars/default/" + url.PathEscape(uid) + ".ics"
+		hdr := http.Header{}
+		hdr.Set("Content-Type", "text/calendar")
+		rec := objectReq(t, http.MethodPut, path, ics, hdr)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("put %s got %d body %q", uid, rec.Code, rec.Body.String())
+		}
+	}
+	put("day1@mox", "20260815T090000Z", "20260815T100000Z")
+	put("day2@mox", "20260820T090000Z", "20260820T100000Z")
+
+	queryBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-data/>
+  </D:prop>
+  <C:filter>
+    <C:comp-filter name="VCALENDAR">
+      <C:comp-filter name="VEVENT">
+        <C:time-range start="2026-08-15T00:00:00Z" end="2026-08-16T00:00:00Z"/>
+      </C:comp-filter>
+    </C:comp-filter>
+  </C:filter>
+</C:calendar-query>`
+	rec := report(t, "/mjl/calendars/default/", queryBody)
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("calendar-query got %d body %q", rec.Code, rec.Body.String())
+	}
+	got := rec.Body.String()
+	if !strings.Contains(got, "calendar-data") {
+		t.Fatalf("missing calendar-data: %q", got)
+	}
+	if !strings.Contains(got, "UID:day1@mox") {
+		t.Fatalf("missing day1 ICS: %q", got)
+	}
+	if strings.Contains(got, "UID:day2@mox") {
+		t.Fatalf("unexpected day2 ICS: %q", got)
+	}
+	if !strings.Contains(got, "/caldav/mjl/calendars/default/"+url.PathEscape("day1@mox")+".ics") {
+		t.Fatalf("missing day1 href: %q", got)
+	}
+
+	known := "/caldav/mjl/calendars/default/" + url.PathEscape("day1@mox") + ".ics"
+	unknown := "/caldav/mjl/calendars/default/" + url.PathEscape("missing@mox") + ".ics"
+	multigetBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-data/>
+  </D:prop>
+  <D:href>` + known + `</D:href>
+  <D:href>` + unknown + `</D:href>
+</C:calendar-multiget>`
+	rec = report(t, "/mjl/calendars/default/", multigetBody)
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("calendar-multiget got %d body %q", rec.Code, rec.Body.String())
+	}
+	got = rec.Body.String()
+	if !strings.Contains(got, "HTTP/1.1 200 OK") {
+		t.Fatalf("missing 200: %q", got)
+	}
+	if !strings.Contains(got, "HTTP/1.1 404 Not Found") {
+		t.Fatalf("missing 404: %q", got)
+	}
+	if !strings.Contains(got, "UID:day1@mox") {
+		t.Fatalf("missing known ICS: %q", got)
+	}
+	if !strings.Contains(got, known) || !strings.Contains(got, unknown) {
+		t.Fatalf("missing hrefs: %q", got)
+	}
+}

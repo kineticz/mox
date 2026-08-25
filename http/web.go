@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/mjl-/mox/autotls"
+	"github.com/mjl-/mox/caldav"
 	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/dns"
 	"github.com/mjl-/mox/imapserver"
@@ -557,6 +558,12 @@ func (s *serve) ServeHTTP(xw http.ResponseWriter, r *http.Request) {
 	http.NotFound(nw, r)
 }
 
+func registerCalDAV(srv *serve, accountHostMatch func(dns.IPDomain) bool, forwarded bool) {
+	caldavHandler := mox.SafeHeaders(http.StripPrefix("/caldav", caldav.Handler(forwarded)))
+	srv.ServiceHandle("caldav", accountHostMatch, "/caldav/", caldavHandler)
+	srv.SystemHandle("caldav-wellknown", accountHostMatch, "/.well-known/caldav", mox.SafeHeaders(http.HandlerFunc(caldav.WellKnown)))
+}
+
 func redirectToTrailingSlash(srv *serve, hostMatch func(dns.IPDomain) bool, name, path string) {
 	// Helpfully redirect user to version with ending slash.
 	if path != "/" && strings.HasSuffix(path, "/") {
@@ -614,6 +621,15 @@ func portServes(name string, l config.Listener) map[int]*serve {
 			return true
 		}
 		return mox.Conf.IsClientSettingsDomain(host.Domain)
+	}
+
+	caldavRegistered := map[*serve]bool{}
+	maybeCalDAV := func(srv *serve, forwarded bool) {
+		if caldavRegistered[srv] {
+			return
+		}
+		registerCalDAV(srv, accountHostMatch, forwarded)
+		caldavRegistered[srv] = true
 	}
 
 	var ensureServe func(https, forwarded, noRateLimiting bool, port int, kind string, favicon bool) *serve
@@ -695,6 +711,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		srv.ServiceHandle("account", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "account", path)
 		ensureACMEHTTP01(srv)
+		maybeCalDAV(srv, l.AccountHTTP.Forwarded)
 	}
 	if l.AccountHTTPS.Enabled {
 		port := config.Port(l.AccountHTTPS.Port, 443)
@@ -706,6 +723,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		handler := mox.SafeHeaders(http.StripPrefix(strings.TrimRight(path, "/"), http.HandlerFunc(webaccount.Handler(path, l.AccountHTTPS.Forwarded))))
 		srv.ServiceHandle("account", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "account", path)
+		maybeCalDAV(srv, l.AccountHTTPS.Forwarded)
 	}
 
 	if l.AdminHTTP.Enabled {
@@ -748,6 +766,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		srv.ServiceHandle("webapi", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "webapi", path)
 		ensureACMEHTTP01(srv)
+		maybeCalDAV(srv, l.WebAPIHTTP.Forwarded)
 	}
 	if l.WebAPIHTTPS.Enabled {
 		port := config.Port(l.WebAPIHTTPS.Port, 443)
@@ -759,6 +778,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		handler := mox.SafeHeaders(http.StripPrefix(strings.TrimRight(path, "/"), webapisrv.NewServer(maxMsgSize, path, l.WebAPIHTTPS.Forwarded)))
 		srv.ServiceHandle("webapi", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "webapi", path)
+		maybeCalDAV(srv, l.WebAPIHTTPS.Forwarded)
 	}
 
 	if l.WebmailHTTP.Enabled {
@@ -779,6 +799,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		srv.ServiceHandle("webmail", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "webmail", path)
 		ensureACMEHTTP01(srv)
+		maybeCalDAV(srv, l.WebmailHTTP.Forwarded)
 	}
 	if l.WebmailHTTPS.Enabled {
 		port := config.Port(l.WebmailHTTPS.Port, 443)
@@ -797,6 +818,7 @@ func portServes(name string, l config.Listener) map[int]*serve {
 		handler := http.StripPrefix(strings.TrimRight(path, "/"), http.HandlerFunc(webmail.Handler(maxMsgSize, path, l.WebmailHTTPS.Forwarded, accountPath)))
 		srv.ServiceHandle("webmail", accountHostMatch, path, handler)
 		redirectToTrailingSlash(srv, accountHostMatch, "webmail", path)
+		maybeCalDAV(srv, l.WebmailHTTPS.Forwarded)
 	}
 
 	if l.MetricsHTTP.Enabled {
