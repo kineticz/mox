@@ -3,6 +3,7 @@ package calendar
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -28,6 +29,9 @@ func flushAfterMutation(ctx context.Context, acc *store.Account, err error) {
 	_ = FlushOutbox(ctx, pkglog, acc)
 }
 
+// ../rfc/5546:3.2.2 REQUEST
+// ../rfc/5546:3.2.3 REPLY
+// ../rfc/5546:3.2.5 CANCEL
 func enqueueOutbox(tx *bstore.Tx, method string, ev store.CalendarEvent) error {
 	if !mox.IMIPEnabled() {
 		return nil
@@ -99,27 +103,34 @@ func insertOutboxRow(tx *bstore.Tx, method string, ev store.CalendarEvent, recip
 		return nil
 	}
 	key := fmt.Sprintf("%s|%s|%d|%s", method, ev.UID, ev.Sequence, recip)
-	exists, err := bstore.QueryTx[store.CalendarOutbox](tx).FilterEqual("IdempotencyKey", key).Exists()
+	ics := methodICS(method, ev.ICS)
+	row, err := bstore.QueryTx[store.CalendarOutbox](tx).FilterEqual("IdempotencyKey", key).Get()
+	if errors.Is(err, bstore.ErrAbsent) {
+		return tx.Insert(&store.CalendarOutbox{
+			Method:         method,
+			UID:            ev.UID,
+			Sequence:       ev.Sequence,
+			Recipient:      recip,
+			ICS:            ics,
+			IdempotencyKey: key,
+			Queued:         false,
+		})
+	}
 	if err != nil {
 		return err
 	}
-	if exists {
+	if row.Queued || method != "REPLY" {
 		return nil
 	}
-	return tx.Insert(&store.CalendarOutbox{
-		Method:         method,
-		UID:            ev.UID,
-		Sequence:       ev.Sequence,
-		Recipient:      recip,
-		ICS:            methodICS(method, ev.ICS),
-		IdempotencyKey: key,
-		Queued:         false,
-	})
+	row.ICS = ics
+	return tx.Update(&row)
 }
 
+// ../rfc/5545:3.7.3 PRODID is required
+// ../rfc/5546:3.1 METHOD on VCALENDAR
 func methodICS(method string, vevent []byte) []byte {
 	var buf bytes.Buffer
-	buf.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:")
+	buf.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mox//caldav//EN\r\nMETHOD:")
 	buf.WriteString(method)
 	buf.WriteString("\r\n")
 	buf.Write(vevent)

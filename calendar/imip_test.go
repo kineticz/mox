@@ -1,6 +1,7 @@
 package calendar
 
 import (
+	"bytes"
 	"errors"
 	"strconv"
 	"testing"
@@ -125,6 +126,9 @@ func TestEnqueueOutboxCreateRespondDelete(t *testing.T) {
 	cal, err := icalendar.Parse(row.ICS)
 	if err != nil || cal.Method() != "REQUEST" {
 		t.Fatalf("REQUEST ICS method=%q err=%v\n%s", cal.Method(), err, row.ICS)
+	}
+	if _, ok := cal.Prop("PRODID"); !ok {
+		t.Fatalf("REQUEST ICS missing PRODID:\n%s", row.ICS)
 	}
 
 	ev, err = svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:att@example.com", "ACCEPTED")
@@ -358,6 +362,47 @@ func TestFlushOutboxNoop(t *testing.T) {
 	rows := outboxByMethod(t, acc, "REQUEST")
 	if len(rows) != 1 || rows[0].Queued {
 		t.Fatalf("stub must leave Queued=false: %#v", rows)
+	}
+}
+
+func TestEnqueueOutboxRespondUpdatesUnqueuedReply(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	ev, err := svc.Create(testctx, acc, inviteInput("outbox-re-reply@mox", "mailto:org@mox.example", "mailto:att@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err = svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:att@example.com", "ACCEPTED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:att@example.com", "DECLINED"); err != nil {
+		t.Fatal(err)
+	}
+	replies := outboxByMethod(t, acc, "REPLY")
+	if len(replies) != 1 {
+		t.Fatalf("REPLY rows=%d, want 1; %#v", len(replies), replies)
+	}
+	reply := replies[0]
+	if reply.Queued {
+		t.Fatalf("Queued: %#v", reply)
+	}
+	if reply.IdempotencyKey != "REPLY|"+ev.UID+"|0|mailto:org@mox.example" {
+		t.Fatalf("IdempotencyKey %q", reply.IdempotencyKey)
+	}
+	cal, err := icalendar.Parse(reply.ICS)
+	if err != nil || cal.Method() != "REPLY" {
+		t.Fatalf("REPLY ICS method=%q err=%v\n%s", cal.Method(), err, reply.ICS)
+	}
+	if _, ok := cal.Prop("PRODID"); !ok {
+		t.Fatalf("REPLY ICS missing PRODID:\n%s", reply.ICS)
+	}
+	if !bytes.Contains(reply.ICS, []byte("PARTSTAT=DECLINED")) {
+		t.Fatalf("REPLY ICS PARTSTAT not DECLINED:\n%s", reply.ICS)
+	}
+	if bytes.Contains(reply.ICS, []byte("PARTSTAT=ACCEPTED")) {
+		t.Fatalf("REPLY ICS still ACCEPTED:\n%s", reply.ICS)
 	}
 }
 
