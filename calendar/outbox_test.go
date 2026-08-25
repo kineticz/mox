@@ -3,9 +3,13 @@ package calendar
 import (
 	"bytes"
 	"context"
+	"net/mail"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/mjl-/bstore"
 
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
@@ -26,6 +30,24 @@ func TestBuildIMIPMessage(t *testing.T) {
 	}
 	if !bytes.Contains(msg, []byte("BEGIN:VCALENDAR")) {
 		t.Fatalf("body missing BEGIN:VCALENDAR:\n%s", msg)
+	}
+}
+
+func TestBuildIMIPMessageSubjectInjection(t *testing.T) {
+	ics := []byte("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	msg, err := buildIMIPMessage("mjl@mox.example", "att@example.com", "Invitation: Meet\nBcc: evil@x.com", "REQUEST", ics)
+	if err != nil {
+		t.Fatalf("buildIMIPMessage: %v", err)
+	}
+	parsed, err := mail.ReadMessage(bytes.NewReader(msg))
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, msg)
+	}
+	if got := parsed.Header.Get("Bcc"); got != "" {
+		t.Fatalf("SUMMARY injected Bcc %q:\n%s", got, msg)
+	}
+	if strings.Contains(string(msg), "\nBcc:") {
+		t.Fatalf("raw Bcc header line:\n%s", msg)
 	}
 }
 
@@ -115,6 +137,9 @@ func TestFlushOutboxAdd(t *testing.T) {
 	if msgs[0].SenderAccount != "mjl" {
 		t.Fatalf("SenderAccount %q", msgs[0].SenderAccount)
 	}
+	if msgs[0].Sender().XString(true) != "mjl@mox.example" {
+		t.Fatalf("From %q, want account organizer", msgs[0].Sender().XString(true))
+	}
 	if msgs[0].Subject != "Invitation: Meet" {
 		t.Fatalf("Subject %q", msgs[0].Subject)
 	}
@@ -138,6 +163,110 @@ func TestFlushOutboxAdd(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Fatalf("second flush queued extra messages: %d", len(msgs))
+	}
+}
+
+func TestFlushOutboxReplyFrom(t *testing.T) {
+	acc, cleanup := setupQueue(t)
+	defer cleanup()
+	enableIMIP(t)
+	svc := Service{}
+	ev, err := svc.Create(testctx, acc, inviteInput("outbox-reply-from@mox", "mailto:org@example.com", "mailto:mjl@mox.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:mjl@mox.example", "ACCEPTED"); err != nil {
+		t.Fatal(err)
+	}
+	replies := outboxByMethod(t, acc, "REPLY")
+	if len(replies) != 1 || !replies[0].Queued {
+		t.Fatalf("REPLY row: %#v", replies)
+	}
+
+	msgs, err := queue.List(testctx, queue.Filter{}, queue.Sort{})
+	if err != nil {
+		t.Fatalf("queue list: %v", err)
+	}
+	var reply *queue.Msg
+	for i := range msgs {
+		if msgs[i].Subject == "Accepted: Meet" {
+			m := msgs[i]
+			reply = &m
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatalf("no REPLY in queue: %#v", msgs)
+	}
+	if got := reply.Sender().XString(true); got != "mjl@mox.example" {
+		t.Fatalf("REPLY From %q, want account attendee (not organizer)", got)
+	}
+	if got := reply.Recipient().XString(true); got != "org@example.com" {
+		t.Fatalf("REPLY To %q", got)
+	}
+}
+
+func TestFlushOutboxSubjectInjection(t *testing.T) {
+	acc, cleanup := setupQueue(t)
+	defer cleanup()
+	enableIMIP(t)
+	in := inviteInput("outbox-subj@mox", "mailto:mjl@mox.example", "mailto:att@example.com")
+	in.Summary = "Meet\nBcc: evil@x.com"
+	if _, err := (Service{}).Create(testctx, acc, in); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := queue.List(testctx, queue.Filter{}, queue.Sort{})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("queue list: n=%d err=%v", len(msgs), err)
+	}
+	queued, err := os.ReadFile(msgs[0].MessagePath())
+	if err != nil {
+		t.Fatalf("read queued: %v", err)
+	}
+	parsed, err := mail.ReadMessage(bytes.NewReader(queued))
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, queued)
+	}
+	if got := parsed.Header.Get("Bcc"); got != "" {
+		t.Fatalf("SUMMARY injected Bcc %q:\n%s", got, queued)
+	}
+}
+
+func TestClaimOutboxRowOnce(t *testing.T) {
+	acc := testAccount(t)
+	row := store.CalendarOutbox{
+		Method:         "REQUEST",
+		UID:            "claim@mox",
+		Recipient:      "mailto:att@example.com",
+		ICS:            []byte("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"),
+		IdempotencyKey: "REQUEST|claim@mox|0|mailto:att@example.com",
+	}
+	err := acc.DB.Write(testctx, func(tx *bstore.Tx) error {
+		return tx.Insert(&row)
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var first, second bool
+	err = acc.DB.Write(testctx, func(tx *bstore.Tx) error {
+		var err error
+		first, err = claimOutboxRow(tx, row.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	err = acc.DB.Write(testctx, func(tx *bstore.Tx) error {
+		var err error
+		second, err = claimOutboxRow(tx, row.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if !first || second {
+		t.Fatalf("claims first=%v second=%v, want true then false", first, second)
 	}
 }
 

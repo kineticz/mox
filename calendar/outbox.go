@@ -25,34 +25,59 @@ import (
 var pkglog = mlog.New("calendar", nil)
 
 // ../rfc/6047:2.4 iMIP text/calendar with method parameter
-func buildIMIPMessage(fromAddr, toAddr, subject string, method string, ics []byte) ([]byte, error) {
+func buildIMIPMessage(fromAddr, toAddr, subject string, method string, ics []byte) (msg []byte, err error) {
 	fromAddr = normalizeCalendarAddress(fromAddr)
 	toAddr = normalizeCalendarAddress(toAddr)
 	if fromAddr == "" || toAddr == "" {
 		return nil, fmt.Errorf("missing from or to address")
 	}
+	from, err := smtp.ParseAddress(fromAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing from address %q: %w", fromAddr, err)
+	}
+	to, err := smtp.ParseAddress(toAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing to address %q: %w", toAddr, err)
+	}
+	subject = sanitizeHeaderText(subject)
 
+	smtputf8 := from.Localpart.IsInternational() || to.Localpart.IsInternational()
+	var buf bytes.Buffer
+	xc := message.NewComposer(&buf, 0, smtputf8)
+	defer func() {
+		x := recover()
+		if x == nil {
+			return
+		}
+		if e, ok := x.(error); ok && errors.Is(e, message.ErrCompose) {
+			err = e
+			return
+		}
+		panic(x)
+	}()
+
+	xc.Header("Date", time.Now().Format(message.RFC5322Z))
+	xc.HeaderAddrs("From", []message.NameAddress{{Address: from}})
+	xc.HeaderAddrs("To", []message.NameAddress{{Address: to}})
+	xc.Subject(subject)
+	xc.Header("Message-ID", fmt.Sprintf("<%s>", mox.MessageIDGen(smtputf8)))
+	xc.Header("MIME-Version", "1.0")
 	cte := "7bit"
-	if hasHighBit(ics) || !isASCII(subject) {
+	if hasHighBit(ics) || xc.Has8bit {
 		cte = "8bit"
 	}
-
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().Format(message.RFC5322Z))
-	fmt.Fprintf(&buf, "From: <%s>\r\n", fromAddr)
-	fmt.Fprintf(&buf, "To: <%s>\r\n", toAddr)
-	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)
-	fmt.Fprintf(&buf, "Message-ID: <%s>\r\n", mox.MessageIDGen(false))
-	buf.WriteString("MIME-Version: 1.0\r\n")
-	fmt.Fprintf(&buf, "Content-Type: text/calendar; charset=utf-8; method=%s\r\n", method)
-	fmt.Fprintf(&buf, "Content-Transfer-Encoding: %s\r\n", cte)
-	buf.WriteString("\r\n")
-	buf.Write(ics)
+	xc.Header("Content-Type", fmt.Sprintf("text/calendar; charset=utf-8; method=%s", method))
+	xc.Header("Content-Transfer-Encoding", cte)
+	xc.Line()
+	xc.Write(ics)
+	xc.Flush()
 	return buf.Bytes(), nil
 }
 
-func isASCII(s string) bool {
-	return !hasHighBit([]byte(s))
+func sanitizeHeaderText(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
 }
 
 func hasHighBit(b []byte) bool {
@@ -108,6 +133,7 @@ func firstDestination(acc *store.Account) string {
 }
 
 func outboxSubject(method, summary string) string {
+	summary = sanitizeHeaderText(summary)
 	switch method {
 	case "REQUEST":
 		return "Invitation: " + summary
@@ -118,6 +144,48 @@ func outboxSubject(method, summary string) string {
 	default:
 		return summary
 	}
+}
+
+func outboxFromAddress(acc *store.Account, method string, ics []byte) string {
+	if method == "REPLY" {
+		if addr := respondingAccountAttendee(acc, ics); addr != "" {
+			return addr
+		}
+		return firstDestination(acc)
+	}
+	_, organizer := outboxSummaryOrganizer(ics)
+	if accountOwnsOrganizer(acc, organizer) {
+		return normalizeCalendarAddress(organizer)
+	}
+	return firstDestination(acc)
+}
+
+func respondingAccountAttendee(acc *store.Account, ics []byte) string {
+	cal, err := icalendar.Parse(ics)
+	if err != nil {
+		return ""
+	}
+	var fallback string
+	for _, c := range cal.Components {
+		if c.Name != "VEVENT" {
+			continue
+		}
+		for _, p := range c.Props("ATTENDEE") {
+			if !accountOwnsOrganizer(acc, p.Value) {
+				continue
+			}
+			addr := normalizeCalendarAddress(p.Value)
+			ps, _ := p.Param("PARTSTAT")
+			switch strings.ToUpper(ps) {
+			case "ACCEPTED", "TENTATIVE", "DECLINED":
+				return addr
+			}
+			if fallback == "" {
+				fallback = addr
+			}
+		}
+	}
+	return fallback
 }
 
 // FlushOutbox submits unqueued CalendarOutbox rows to the mail queue.
@@ -141,8 +209,27 @@ func FlushOutbox(ctx context.Context, log mlog.Log, acc *store.Account) error {
 
 	var first error
 	for _, row := range rows {
+		var claimed bool
+		err := acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+			var err error
+			claimed, err = claimOutboxRow(tx, row.ID)
+			return err
+		})
+		if err != nil {
+			log.Errorx("claiming calendar outbox row", err, slog.String("uid", row.UID), slog.String("method", row.Method), slog.String("recipient", row.Recipient))
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		if !claimed {
+			continue
+		}
 		if err := flushOutboxRow(ctx, log, acc, row); err != nil {
 			log.Errorx("adding iMIP message to queue", err, slog.String("uid", row.UID), slog.String("method", row.Method), slog.String("recipient", row.Recipient))
+			if uerr := unclaimOutboxRow(ctx, acc, row.ID); uerr != nil {
+				log.Errorx("clearing calendar outbox claim", uerr, slog.Int64("id", row.ID))
+			}
 			if first == nil {
 				first = err
 			}
@@ -151,12 +238,35 @@ func FlushOutbox(ctx context.Context, log mlog.Log, acc *store.Account) error {
 	return first
 }
 
-func flushOutboxRow(ctx context.Context, log mlog.Log, acc *store.Account, row store.CalendarOutbox) error {
-	summary, organizer := outboxSummaryOrganizer(row.ICS)
-	fromAddr := normalizeCalendarAddress(organizer)
-	if fromAddr == "" {
-		fromAddr = firstDestination(acc)
+func claimOutboxRow(tx *bstore.Tx, id int64) (bool, error) {
+	row := store.CalendarOutbox{ID: id}
+	if err := tx.Get(&row); err != nil {
+		return false, err
 	}
+	if row.Queued {
+		return false, nil
+	}
+	row.Queued = true
+	if err := tx.Update(&row); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func unclaimOutboxRow(ctx context.Context, acc *store.Account, id int64) error {
+	return acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+		row := store.CalendarOutbox{ID: id}
+		if err := tx.Get(&row); err != nil {
+			return err
+		}
+		row.Queued = false
+		return tx.Update(&row)
+	})
+}
+
+func flushOutboxRow(ctx context.Context, log mlog.Log, acc *store.Account, row store.CalendarOutbox) error {
+	summary, _ := outboxSummaryOrganizer(row.ICS)
+	fromAddr := outboxFromAddress(acc, row.Method, row.ICS)
 	toAddr := normalizeCalendarAddress(row.Recipient)
 	subject := outboxSubject(row.Method, summary)
 
@@ -190,13 +300,7 @@ func flushOutboxRow(ctx context.Context, log mlog.Log, acc *store.Account, row s
 
 	smtputf8 := fromPath.Localpart.IsInternational() || toPath.Localpart.IsInternational()
 	qm := queue.MakeMsg(fromPath, toPath, hasHighBit(msg), smtputf8, int64(len(msg)), messageID, nil, nil, time.Now(), subject)
-	if err := queue.Add(ctx, log, acc.Name, msgFile, qm); err != nil {
-		return err
-	}
-	row.Queued = true
-	return acc.DB.Write(ctx, func(tx *bstore.Tx) error {
-		return tx.Update(&row)
-	})
+	return queue.Add(ctx, log, acc.Name, msgFile, qm)
 }
 
 func flushAfterMutation(ctx context.Context, acc *store.Account, err error) {
