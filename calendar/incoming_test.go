@@ -119,6 +119,27 @@ func TestProcessIncomingMailMismatchReturnsNil(t *testing.T) {
 	}
 }
 
+// Mail the junk filter rejected must not mutate the calendar; the mail itself
+// is still kept.
+func TestProcessIncomingMailSkipsJunk(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	m := incomingStoreMsg("org@mox.example", "org", "mox.example", true)
+	m.Junk = true
+	f := writeIncomingFile(t, incomingMIME(requestICS))
+
+	err := ProcessIncomingMail(testctx, mlog.New("calendar", nil), acc, m, f)
+	if err != nil {
+		t.Fatalf("junk must not fail SMTP: %v", err)
+	}
+	if inboundCount(t, acc) != 0 {
+		t.Fatal("junk message was applied")
+	}
+	if _, err := (Service{}).GetObject(testctx, acc, "imip-mail@mox"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("junk message wrote object: %v", err)
+	}
+}
+
 func TestProcessIncomingMailSkipsOversize(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)

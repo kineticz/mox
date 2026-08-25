@@ -11,6 +11,7 @@ import (
 
 	"github.com/mjl-/bstore"
 
+	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/icalendar"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -32,6 +33,12 @@ type IncomingMeta struct {
 // ../rfc/5546 iTIP methods REQUEST, REPLY, CANCEL
 func ProcessIncomingMail(ctx context.Context, log mlog.Log, acc *store.Account, m *store.Message, msgFile *os.File) error {
 	if !mox.IMIPEnabled() {
+		return nil
+	}
+	// Mail the junk filter rejected must not change the calendar. The message
+	// itself is kept as normal mail.
+	if m.Junk {
+		log.Debug("skipping calendar processing of junk message")
 		return nil
 	}
 
@@ -143,6 +150,12 @@ func applyRequest(ctx context.Context, acc *store.Account, cal icalendar.Calenda
 	existing, err := storedEvents(ctx, acc, uid)
 	if err != nil {
 		return "", err
+	}
+	// A REQUEST carrying only exception instances describes part of a series.
+	// Replacing the whole object would delete the stored master and its other
+	// exceptions, so keep the mail and do not merge in v1.
+	if allInstanceOnly(vevents) && hasMaster(existing) {
+		return record("conflict")
 	}
 	if len(existing) > 0 {
 		storedSeq := maxSequence(existing)
@@ -275,8 +288,16 @@ func applyThisAndFutureCancel(ctx context.Context, acc *store.Account, existing 
 		newSeq = stored + 1
 	}
 
+	// UNTIL bounds the RRULE only. RDATE values at or after the Recurrence-ID
+	// are dropped like the later exceptions below.
+	keptRDATE, err := rdatesBefore(master.RDATE, rid.UTC)
+	if err != nil {
+		return record("ignored-mismatch")
+	}
+
 	updated := *master
 	updated.RRULE = newRRULE
+	updated.RDATE = keptRDATE
 	updated.Sequence = newSeq
 	updated.Revision = master.Revision + 1
 	updated.LastModified = time.Now().UTC()
@@ -326,6 +347,28 @@ func applyThisAndFutureCancel(ctx context.Context, acc *store.Account, existing 
 	return record("applied")
 }
 
+// rdatesBefore keeps only the RDATE values strictly before cut, preserving the
+// original comma-separated grouping of the values it keeps.
+func rdatesBefore(values []string, cut time.Time) ([]string, error) {
+	var kept []string
+	for _, list := range values {
+		var keep []string
+		for _, value := range strings.Split(list, ",") {
+			dates, err := parseDateValues("RDATE", []string{value})
+			if err != nil {
+				return nil, err
+			}
+			if len(dates) == 1 && dates[0].UTC.Before(cut) {
+				keep = append(keep, value)
+			}
+		}
+		if len(keep) > 0 {
+			kept = append(kept, strings.Join(keep, ","))
+		}
+	}
+	return kept, nil
+}
+
 func thisAndFutureRecurrenceID(vevents []icalendar.Component) (icalendar.DateTime, bool, error) {
 	for _, c := range vevents {
 		p, ok := c.Prop("RECURRENCE-ID")
@@ -340,6 +383,15 @@ func thisAndFutureRecurrenceID(vevents []icalendar.Component) (icalendar.DateTim
 	return icalendar.DateTime{}, false, nil
 }
 
+// maxRecurrenceBoundDays caps how far recurrenceBoundUTC expands. Expand walks
+// day by day and stops as soon as COUNT is reached, so a rule whose COUNT is
+// reachable costs only the days up to its last instance. The cap is what keeps a
+// rule like FREQ=YEARLY;INTERVAL=1000;COUNT=520, whose COUNT is not reachable in
+// any sane window, from stalling the incoming mail path.
+const maxRecurrenceBoundDays = 100 * 366
+
+// recurrenceBoundUTC returns the last instant a recurrence rule can produce, or
+// nil when the rule is unbounded or its bound lies beyond the window we walk.
 func recurrenceBoundUTC(ev store.CalendarEvent) (*time.Time, error) {
 	r, err := icalendar.ParseRRULE(ev.RRULE)
 	if err != nil {
@@ -352,20 +404,19 @@ func recurrenceBoundUTC(ev store.CalendarEvent) (*time.Time, error) {
 	if r.Count == 0 {
 		return nil, nil
 	}
-	start := icalendar.DateTime{UTC: ev.StartUTC, TZID: ev.TZID, DateOnly: ev.DateOnly, Floating: ev.Floating}
-	exdates, err := parseDateValues("EXDATE", ev.EXDATE)
-	if err != nil {
-		return nil, err
-	}
 	from := ev.StartUTC
-	to := from.AddDate(r.Count*r.Interval+1, 0, 0)
-	inst, err := icalendar.Expand(start, r, nil, exdates, from, to, r.Count)
+	to := from.AddDate(0, 0, maxRecurrenceBoundDays)
+	start := icalendar.DateTime{UTC: ev.StartUTC, TZID: ev.TZID, DateOnly: ev.DateOnly, Floating: ev.Floating}
+	// EXDATEs are not passed: COUNT counts generated occurrences, and the last
+	// generated one is the bound we may clip UNTIL to.
+	inst, err := icalendar.Expand(start, r, nil, nil, from, to, r.Count)
 	if err != nil {
 		return nil, err
 	}
-	if len(inst) == 0 {
-		t := ev.StartUTC
-		return &t, nil
+	if len(inst) < r.Count {
+		// COUNT was not exhausted inside the window, so we do not know the last
+		// instant. Report unbounded rather than shrinking the rule to a wrong one.
+		return nil, nil
 	}
 	last := inst[len(inst)-1].UTC
 	return &last, nil
@@ -492,6 +543,27 @@ func hasThisAndFuture(vevents []icalendar.Component) bool {
 	return false
 }
 
+func allInstanceOnly(vevents []icalendar.Component) bool {
+	if len(vevents) == 0 {
+		return false
+	}
+	for _, c := range vevents {
+		if _, ok := c.Prop("RECURRENCE-ID"); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func hasMaster(events []store.CalendarEvent) bool {
+	for _, ev := range events {
+		if ev.RecurrenceID == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func maxSequence(events []store.CalendarEvent) int {
 	var seq int
 	for _, ev := range events {
@@ -507,8 +579,12 @@ func accountOwnsOrganizer(acc *store.Account, organizer string) bool {
 	if !ok {
 		return false
 	}
-	for addr := range conf.Destinations {
-		if AddressMatch(addr, organizer) {
+	return destinationsMatch(conf.Destinations, organizer)
+}
+
+func destinationsMatch(dests map[string]config.Destination, addr string) bool {
+	for _, dest := range sendableDestinations(dests) {
+		if AddressMatch(dest, addr) {
 			return true
 		}
 	}

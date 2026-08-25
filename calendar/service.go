@@ -122,7 +122,7 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 			if err := tx.Insert(&ev); err != nil {
 				return err
 			}
-			if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+			if err := enqueueOutbox(tx, acc, "REQUEST", ev); err != nil {
 				return err
 			}
 			return bumpCalendarCTag(tx, acc)
@@ -197,7 +197,7 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 				return err
 			}
 			ev = updated
-			if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+			if err := enqueueOutbox(tx, acc, "REQUEST", ev); err != nil {
 				return err
 			}
 			return bumpCalendarCTag(tx, acc)
@@ -264,7 +264,7 @@ func respond(ctx context.Context, acc *store.Account, id int64, revision int64, 
 			}
 			ev = updated
 			if enqueue {
-				if err := enqueueOutbox(tx, "REPLY", ev); err != nil {
+				if err := enqueueOutbox(tx, acc, "REPLY", ev); err != nil {
 					return err
 				}
 			}
@@ -302,7 +302,7 @@ func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revisio
 				return ErrStale
 			}
 			if wholeSeries || ev.RecurrenceID == "" {
-				if err := enqueueCancelForUID(tx, ev); err != nil {
+				if err := enqueueCancelForUID(tx, acc, ev); err != nil {
 					return err
 				}
 				_, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: ev.UID}).Delete()
@@ -494,7 +494,7 @@ func putObject(ctx context.Context, acc *store.Account, uid string, ics []byte, 
 			}
 			if enqueue {
 				for _, ev := range inserted {
-					if err := enqueueOutbox(tx, "REQUEST", ev); err != nil {
+					if err := enqueueOutbox(tx, acc, "REQUEST", ev); err != nil {
 						return err
 					}
 				}
@@ -537,7 +537,7 @@ func deleteObject(ctx context.Context, acc *store.Account, uid string, ifMatch s
 			}
 			if enqueue {
 				for _, ev := range events {
-					if err := enqueueOutbox(tx, "CANCEL", ev); err != nil {
+					if err := enqueueOutbox(tx, acc, "CANCEL", ev); err != nil {
 						return err
 					}
 				}

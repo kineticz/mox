@@ -3,6 +3,7 @@ package calendar
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/mjl-/bstore"
 
+	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/icalendar"
 	"github.com/mjl-/mox/mlog"
 	"github.com/mjl-/mox/mox-"
@@ -104,7 +106,7 @@ func TestEnqueueOutboxCreateRespondDelete(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
 	svc := Service{}
-	in := inviteInput("outbox1@mox", "mailto:org@mox.example", "mailto:att@example.com")
+	in := inviteInput("outbox1@mox", "mailto:mjl@mox.example", "mailto:att@example.com")
 
 	ev, err := svc.Create(testctx, acc, in)
 	if err != nil {
@@ -118,10 +120,10 @@ func TestEnqueueOutboxCreateRespondDelete(t *testing.T) {
 	if row.UID != ev.UID || row.Sequence != ev.Sequence || row.Queued {
 		t.Fatalf("REQUEST row: %#v", row)
 	}
-	if row.Recipient != "mailto:att@example.com" {
+	if row.Recipient != "att@example.com" {
 		t.Fatalf("REQUEST recipient %q", row.Recipient)
 	}
-	wantKey := "REQUEST|" + ev.UID + "|0|mailto:att@example.com"
+	wantKey := "REQUEST|" + ev.UID + "|0|att@example.com"
 	if row.IdempotencyKey != wantKey {
 		t.Fatalf("IdempotencyKey %q, want %q", row.IdempotencyKey, wantKey)
 	}
@@ -142,11 +144,11 @@ func TestEnqueueOutboxCreateRespondDelete(t *testing.T) {
 		t.Fatalf("after Respond: REPLY rows=%d, want 1; all=%#v", len(replies), outboxRows(t, acc))
 	}
 	reply := replies[0]
-	if reply.Recipient != "mailto:org@mox.example" || reply.Queued || reply.Sequence != ev.Sequence {
+	if reply.Recipient != "mjl@mox.example" || reply.Queued || reply.Sequence != ev.Sequence {
 		t.Fatalf("REPLY row: %#v", reply)
 	}
-	if reply.IdempotencyKey != "REPLY|"+ev.UID+"|0|mailto:org@mox.example" {
-		t.Fatalf("REPLY IdempotencyKey %q", reply.IdempotencyKey)
+	if want := fmt.Sprintf("REPLY|%s|%d|mjl@mox.example", ev.UID, ev.Revision); reply.IdempotencyKey != want {
+		t.Fatalf("REPLY IdempotencyKey %q, want %q", reply.IdempotencyKey, want)
 	}
 	cal, err = icalendar.Parse(reply.ICS)
 	if err != nil || cal.Method() != "REPLY" {
@@ -161,10 +163,10 @@ func TestEnqueueOutboxCreateRespondDelete(t *testing.T) {
 		t.Fatalf("after Delete: CANCEL rows=%d, want 1; all=%#v", len(cancels), outboxRows(t, acc))
 	}
 	cancel := cancels[0]
-	if cancel.Recipient != "mailto:att@example.com" || cancel.Queued {
+	if cancel.Recipient != "att@example.com" || cancel.Queued {
 		t.Fatalf("CANCEL row: %#v", cancel)
 	}
-	if cancel.IdempotencyKey != "CANCEL|"+ev.UID+"|0|mailto:att@example.com" {
+	if cancel.IdempotencyKey != "CANCEL|"+ev.UID+"|0|att@example.com" {
 		t.Fatalf("CANCEL IdempotencyKey %q", cancel.IdempotencyKey)
 	}
 	cal, err = icalendar.Parse(cancel.ICS)
@@ -215,7 +217,7 @@ func TestEnqueueOutboxExceptionSkipped(t *testing.T) {
 	master, err := svc.Create(testctx, acc, EventInput{
 		UID:       "outbox-ex@mox",
 		Summary:   "Series",
-		Organizer: "mailto:org@mox.example",
+		Organizer: "mailto:mjl@mox.example",
 		Start:     start,
 		End:       end,
 		RRULE:     "FREQ=DAILY;COUNT=3",
@@ -233,7 +235,7 @@ func TestEnqueueOutboxExceptionSkipped(t *testing.T) {
 		UID:          master.UID,
 		RecurrenceID: "20260816T090000Z",
 		Summary:      "Exception",
-		Organizer:    "mailto:org@mox.example",
+		Organizer:    "mailto:mjl@mox.example",
 		Start:        exStart,
 		End:          exEnd,
 		Attendees:    []store.CalendarAttendee{{Address: "mailto:att@example.com"}},
@@ -249,7 +251,7 @@ func TestEnqueueOutboxExceptionSkipped(t *testing.T) {
 		RecurrenceID: ex.RecurrenceID,
 		Revision:     ex.Revision,
 		Summary:      "Exception 2",
-		Organizer:    "mailto:org@mox.example",
+		Organizer:    "mailto:mjl@mox.example",
 		Start:        exStart,
 		End:          exEnd,
 		Attendees:    []store.CalendarAttendee{{Address: "mailto:att@example.com"}},
@@ -272,7 +274,7 @@ func TestEnqueueOutboxUpdateSequence(t *testing.T) {
 	enableIMIP(t)
 	svc := Service{}
 	start, end := testTimes()
-	ev, err := svc.Create(testctx, acc, inviteInput("outbox-upd@mox", "mailto:org@mox.example", "mailto:att@example.com"))
+	ev, err := svc.Create(testctx, acc, inviteInput("outbox-upd@mox", "mailto:mjl@mox.example", "mailto:att@example.com"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +282,7 @@ func TestEnqueueOutboxUpdateSequence(t *testing.T) {
 		UID:       ev.UID,
 		Revision:  ev.Revision,
 		Summary:   "Meet 2",
-		Organizer: "mailto:org@mox.example",
+		Organizer: "mailto:mjl@mox.example",
 		Start:     start,
 		End:       end,
 		Attendees: []store.CalendarAttendee{{Address: "mailto:att@example.com"}},
@@ -299,8 +301,8 @@ func TestEnqueueOutboxUpdateSequence(t *testing.T) {
 	for _, row := range reqs {
 		keys[row.IdempotencyKey] = true
 	}
-	want0 := "REQUEST|" + ev.UID + "|0|mailto:att@example.com"
-	want1 := "REQUEST|" + ev.UID + "|1|mailto:att@example.com"
+	want0 := "REQUEST|" + ev.UID + "|0|att@example.com"
+	want1 := "REQUEST|" + ev.UID + "|1|att@example.com"
 	if !keys[want0] || !keys[want1] {
 		t.Fatalf("keys %v, want %q and %q", keys, want0, want1)
 	}
@@ -310,7 +312,7 @@ func TestEnqueueOutboxPutDeleteObject(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
 	svc := Service{}
-	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:outbox-obj@mox\r\nSEQUENCE:0\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:CalDAV\r\nORGANIZER:mailto:org@mox.example\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:att@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:outbox-obj@mox\r\nSEQUENCE:0\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:CalDAV\r\nORGANIZER:mailto:mjl@mox.example\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:att@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
 	obj, err := svc.PutObject(testctx, acc, "outbox-obj@mox", ics, "")
 	if err != nil {
 		t.Fatal(err)
@@ -319,14 +321,14 @@ func TestEnqueueOutboxPutDeleteObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	reqs := outboxByMethod(t, acc, "REQUEST")
-	if len(reqs) != 1 || reqs[0].IdempotencyKey != "REQUEST|outbox-obj@mox|0|mailto:att@example.com" {
+	if len(reqs) != 1 || reqs[0].IdempotencyKey != "REQUEST|outbox-obj@mox|0|att@example.com" {
 		t.Fatalf("PutObject REQUEST: %#v", reqs)
 	}
 	if err := svc.DeleteObject(testctx, acc, "outbox-obj@mox", ""); err != nil {
 		t.Fatal(err)
 	}
 	cancels := outboxByMethod(t, acc, "CANCEL")
-	if len(cancels) != 1 || cancels[0].IdempotencyKey != "CANCEL|outbox-obj@mox|0|mailto:att@example.com" {
+	if len(cancels) != 1 || cancels[0].IdempotencyKey != "CANCEL|outbox-obj@mox|0|att@example.com" {
 		t.Fatalf("DeleteObject CANCEL: %#v", cancels)
 	}
 }
@@ -334,8 +336,8 @@ func TestEnqueueOutboxPutDeleteObject(t *testing.T) {
 func TestEnqueueOutboxSkipsOrganizerAttendee(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
-	in := inviteInput("outbox-org@mox", "mailto:Org@Mox.example", "mailto:Att@Example.COM")
-	in.Attendees = append(in.Attendees, store.CalendarAttendee{Address: "mailto:org@mox.example"})
+	in := inviteInput("outbox-org@mox", "mailto:Mjl@Mox.example", "mailto:Att@Example.COM")
+	in.Attendees = append(in.Attendees, store.CalendarAttendee{Address: "mailto:mjl@mox.example"})
 	ev, err := (Service{}).Create(testctx, acc, in)
 	if err != nil {
 		t.Fatal(err)
@@ -344,10 +346,10 @@ func TestEnqueueOutboxSkipsOrganizerAttendee(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("REQUEST rows=%d, want 1 (skip organizer); %#v", len(reqs), reqs)
 	}
-	if reqs[0].Recipient != "mailto:att@example.com" {
+	if reqs[0].Recipient != "att@example.com" {
 		t.Fatalf("recipient %q", reqs[0].Recipient)
 	}
-	if reqs[0].IdempotencyKey != "REQUEST|"+ev.UID+"|0|mailto:att@example.com" {
+	if reqs[0].IdempotencyKey != "REQUEST|"+ev.UID+"|0|att@example.com" {
 		t.Fatalf("key %q", reqs[0].IdempotencyKey)
 	}
 }
@@ -355,7 +357,7 @@ func TestEnqueueOutboxSkipsOrganizerAttendee(t *testing.T) {
 func TestFlushOutboxQueueNotInitialized(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
-	if _, err := (Service{}).Create(testctx, acc, inviteInput("outbox-flush@mox", "mailto:org@mox.example", "mailto:att@example.com")); err != nil {
+	if _, err := (Service{}).Create(testctx, acc, inviteInput("outbox-flush@mox", "mailto:mjl@mox.example", "mailto:att@example.com")); err != nil {
 		t.Fatal(err)
 	}
 	if err := FlushOutbox(testctx, mlog.New("calendar", nil), acc); err == nil {
@@ -367,7 +369,7 @@ func TestFlushOutboxQueueNotInitialized(t *testing.T) {
 	}
 }
 
-func TestEnqueueOutboxRespondUpdatesUnqueuedReply(t *testing.T) {
+func TestEnqueueOutboxRespondTwiceEnqueuesBoth(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
 	svc := Service{}
@@ -383,28 +385,37 @@ func TestEnqueueOutboxRespondUpdatesUnqueuedReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	replies := outboxByMethod(t, acc, "REPLY")
-	if len(replies) != 1 {
-		t.Fatalf("REPLY rows=%d, want 1; %#v", len(replies), replies)
+	if len(replies) != 2 {
+		t.Fatalf("REPLY rows=%d, want 2; %#v", len(replies), replies)
 	}
-	reply := replies[0]
-	if reply.Queued {
-		t.Fatalf("Queued: %#v", reply)
+	partStats := map[string]bool{}
+	keys := map[string]bool{}
+	for _, reply := range replies {
+		if reply.Queued {
+			t.Fatalf("Queued: %#v", reply)
+		}
+		keys[reply.IdempotencyKey] = true
+		cal, err := icalendar.Parse(reply.ICS)
+		if err != nil || cal.Method() != "REPLY" {
+			t.Fatalf("REPLY ICS method=%q err=%v\n%s", cal.Method(), err, reply.ICS)
+		}
+		if _, ok := cal.Prop("PRODID"); !ok {
+			t.Fatalf("REPLY ICS missing PRODID:\n%s", reply.ICS)
+		}
+		for _, ps := range []string{"ACCEPTED", "DECLINED"} {
+			if bytes.Contains(reply.ICS, []byte("PARTSTAT="+ps)) {
+				partStats[ps] = true
+			}
+		}
 	}
-	if reply.IdempotencyKey != "REPLY|"+ev.UID+"|0|mailto:org@mox.example" {
-		t.Fatalf("IdempotencyKey %q", reply.IdempotencyKey)
+	if len(keys) != 2 {
+		t.Fatalf("REPLY rows share an IdempotencyKey: %v", keys)
 	}
-	cal, err := icalendar.Parse(reply.ICS)
-	if err != nil || cal.Method() != "REPLY" {
-		t.Fatalf("REPLY ICS method=%q err=%v\n%s", cal.Method(), err, reply.ICS)
+	if !partStats["ACCEPTED"] || !partStats["DECLINED"] {
+		t.Fatalf("REPLY PARTSTATs %v, want both ACCEPTED and DECLINED", partStats)
 	}
-	if _, ok := cal.Prop("PRODID"); !ok {
-		t.Fatalf("REPLY ICS missing PRODID:\n%s", reply.ICS)
-	}
-	if !bytes.Contains(reply.ICS, []byte("PARTSTAT=DECLINED")) {
-		t.Fatalf("REPLY ICS PARTSTAT not DECLINED:\n%s", reply.ICS)
-	}
-	if bytes.Contains(reply.ICS, []byte("PARTSTAT=ACCEPTED")) {
-		t.Fatalf("REPLY ICS still ACCEPTED:\n%s", reply.ICS)
+	if want := fmt.Sprintf("REPLY|%s|%d|org@mox.example", ev.UID, ev.Revision); !keys[want] {
+		t.Fatalf("keys %v, want %q keyed on revision", keys, want)
 	}
 }
 
@@ -799,6 +810,240 @@ func TestApplyIncomingPutObjectInvalidRecordsInbound(t *testing.T) {
 	inboundHas(t, acc, "REQUEST", "imip-invalid@mox", 1, "ignored-mismatch")
 	if _, err := (Service{}).GetObject(testctx, acc, "imip-invalid@mox"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("invalid PutObject wrote object: %v", err)
+	}
+}
+
+// A received invitation stored through CalDAV must not make this account speak
+// as the organizer. ../rfc/5546:1.4 only the Organizer sends REQUEST/CANCEL.
+func TestEnqueueOutboxRequiresOrganizerOwnership(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+
+	ev, err := svc.Create(testctx, acc, inviteInput("foreign-create@mox", "mailto:org@example.com", "mailto:att@example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := outboxRows(t, acc); len(rows) != 0 {
+		t.Fatalf("Create as non-organizer enqueued %#v", rows)
+	}
+	if err := svc.Delete(testctx, acc, ev.ID, ev.Revision, true); err != nil {
+		t.Fatal(err)
+	}
+	if rows := outboxRows(t, acc); len(rows) != 0 {
+		t.Fatalf("Delete as non-organizer enqueued %#v", rows)
+	}
+
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:foreign-obj@mox\r\nSEQUENCE:0\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Received\r\nORGANIZER:mailto:org@example.com\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:mjl@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	if _, err := svc.PutObject(testctx, acc, "foreign-obj@mox", ics, ""); err != nil {
+		t.Fatal(err)
+	}
+	if rows := outboxRows(t, acc); len(rows) != 0 {
+		t.Fatalf("PutObject as non-organizer enqueued %#v", rows)
+	}
+	if err := svc.DeleteObject(testctx, acc, "foreign-obj@mox", ""); err != nil {
+		t.Fatal(err)
+	}
+	if rows := outboxRows(t, acc); len(rows) != 0 {
+		t.Fatalf("DeleteObject as non-organizer enqueued %#v", rows)
+	}
+}
+
+// ATTENDEE values that are not mailbox addresses can never be sent, so they
+// must not become outbox rows that are reclaimed and retried forever.
+func TestEnqueueOutboxSkipsUnsendableAttendee(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	in := inviteInput("outbox-unsendable@mox", "mailto:mjl@mox.example", "urn:uuid:abc")
+	in.Attendees = append(in.Attendees, store.CalendarAttendee{Address: "mailto:att@example.com"})
+	if _, err := (Service{}).Create(testctx, acc, in); err != nil {
+		t.Fatal(err)
+	}
+	reqs := outboxByMethod(t, acc, "REQUEST")
+	if len(reqs) != 1 {
+		t.Fatalf("REQUEST rows=%d, want 1; %#v", len(reqs), reqs)
+	}
+	if reqs[0].Recipient != "att@example.com" {
+		t.Fatalf("recipient %q, want the sendable attendee", reqs[0].Recipient)
+	}
+}
+
+func TestDestinationsSkipCatchall(t *testing.T) {
+	dests := map[string]config.Destination{
+		"@mox.example":    {},
+		"mjl@mox.example": {},
+	}
+	addrs := sendableDestinations(dests)
+	if len(addrs) != 1 || addrs[0] != "mjl@mox.example" {
+		t.Fatalf("sendable destinations %v, want only mjl@mox.example", addrs)
+	}
+	if !destinationsMatch(dests, "mailto:mjl@mox.example") {
+		t.Fatal("account no longer owns mjl@mox.example")
+	}
+	if destinationsMatch(dests, "mailto:anyone@mox.example") {
+		t.Fatal("catchall destination matched an arbitrary address")
+	}
+}
+
+func TestFirstDestinationIsARealAddress(t *testing.T) {
+	acc := testAccount(t)
+	if got := firstDestination(acc); got != "mjl@mox.example" {
+		t.Fatalf("firstDestination %q", got)
+	}
+}
+
+// A REQUEST that carries only exception instances must not replace the whole
+// object, which would delete the master. ../rfc/5546:3.2.2
+func TestApplyIncomingInstanceOnlyRequestKeepsSeries(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start, end := testTimes()
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-instance-only@mox",
+		Summary:   "Series",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=DAILY;COUNT=5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:imip-instance-only@mox\r\nSEQUENCE:1\r\nRECURRENCE-ID:20260817T090000Z\r\nDTSTART:20260817T110000Z\r\nDTEND:20260817T120000Z\r\nSUMMARY:Moved\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, req, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "conflict" {
+		t.Fatalf("instance-only REQUEST: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "REQUEST", "imip-instance-only@mox", 1, "conflict")
+
+	master := eventByUID(t, acc, "imip-instance-only@mox")
+	if master.RecurrenceID != "" || master.RRULE == "" {
+		t.Fatalf("master replaced by exception: %#v", master)
+	}
+	from := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	inst, err := svc.Query(testctx, acc, from, from.AddDate(0, 0, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inst) != 5 {
+		t.Fatalf("series instances=%d, want 5; %#v", len(inst), inst)
+	}
+}
+
+// Address match on MsgFrom alone is sufficient; MailFrom may be empty.
+func TestApplyIncomingMsgFromOnly(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	cal := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:imip-msgfrom@mox\r\nSEQUENCE:1\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Invite\r\nORGANIZER:mailto:org@mox.example\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:mjl@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cal, IncomingMeta{MailFrom: "", MsgFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("MsgFrom-only REQUEST: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "REQUEST", "imip-msgfrom@mox", 1, "applied")
+	if _, err := (Service{}).GetObject(testctx, acc, "imip-msgfrom@mox"); err != nil {
+		t.Fatalf("MsgFrom-only REQUEST did not create object: %v", err)
+	}
+}
+
+// A THISANDFUTURE CANCEL must drop RDATE instances at and after the
+// Recurrence-ID, like it drops later exceptions. UNTIL alone does not bound RDATE.
+func TestApplyIncomingThisAndFutureCancelDropsLaterRDATE(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start, end := testTimes()
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-rdate@mox",
+		Summary:   "Series",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=DAILY;COUNT=3",
+		RDATE:     []string{"20260816T140000Z,20260820T140000Z"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-rdate@mox\r\nSEQUENCE:0\r\nDTSTART:20260817T090000Z\r\nDTEND:20260817T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20260817T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL: result=%q err=%v", result, err)
+	}
+
+	queryDay := func(d int) []Instance {
+		t.Helper()
+		from := time.Date(2026, 8, d, 0, 0, 0, 0, time.UTC)
+		inst, err := svc.Query(testctx, acc, from, from.AddDate(0, 0, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inst
+	}
+	if inst := queryDay(20); len(inst) != 0 {
+		t.Fatalf("RDATE after the cancel point still queryable: %#v", inst)
+	}
+	if inst := queryDay(16); len(inst) != 2 {
+		t.Fatalf("earlier RDATE dropped: %#v", inst)
+	}
+}
+
+// ../rfc/5546:3.2.5 bound computation must not walk a multi-century window.
+func TestRecurrenceBoundLargeIntervalIsCheap(t *testing.T) {
+	ev := store.CalendarEvent{
+		UID:      "bound@mox",
+		StartUTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC),
+		EndUTC:   time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC),
+		RRULE:    "FREQ=YEARLY;INTERVAL=1000;COUNT=520",
+	}
+	done := make(chan struct{})
+	var bound *time.Time
+	var err error
+	go func() {
+		bound, err = recurrenceBoundUTC(ev)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recurrenceBoundUTC did not return within a second")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound != nil {
+		t.Fatalf("bound %v, want nil (unknown, not a wrong last instance)", bound)
+	}
+}
+
+func TestApplyIncomingThisAndFutureCancelLargeIntervalDoesNotGrow(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start, end := testTimes()
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-huge@mox",
+		Summary:   "Millennial",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=YEARLY;INTERVAL=1000;COUNT=520",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-huge@mox\r\nSEQUENCE:0\r\nDTSTART:20270815T090000Z\r\nDTEND:20270815T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20270815T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL: result=%q err=%v", result, err)
+	}
+	from := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	inst, err := svc.Query(testctx, acc, from, from.AddDate(0, 0, 400))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inst) != 1 {
+		t.Fatalf("instances=%d, want 1; %#v", len(inst), inst)
 	}
 }
 

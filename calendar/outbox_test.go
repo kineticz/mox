@@ -206,6 +206,59 @@ func TestFlushOutboxReplyFrom(t *testing.T) {
 	}
 }
 
+// Respond does not bump SEQUENCE, so a REPLY key keyed on SEQUENCE would make
+// every PARTSTAT change after the first flush a no-op.
+func TestFlushOutboxRespondTwiceQueuesBoth(t *testing.T) {
+	acc, cleanup := setupQueue(t)
+	defer cleanup()
+	enableIMIP(t)
+	svc := Service{}
+	ev, err := svc.Create(testctx, acc, inviteInput("outbox-reply-twice@mox", "mailto:org@example.com", "mailto:mjl@mox.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err = svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:mjl@mox.example", "ACCEPTED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Respond(testctx, acc, ev.ID, ev.Revision, "mailto:mjl@mox.example", "DECLINED"); err != nil {
+		t.Fatal(err)
+	}
+
+	replies := outboxByMethod(t, acc, "REPLY")
+	if len(replies) != 2 {
+		t.Fatalf("REPLY rows=%d, want 2; %#v", len(replies), replies)
+	}
+	for _, row := range replies {
+		if !row.Queued {
+			t.Fatalf("REPLY row not queued: %#v", row)
+		}
+	}
+
+	msgs, err := queue.List(testctx, queue.Filter{}, queue.Sort{})
+	if err != nil {
+		t.Fatalf("queue list: %v", err)
+	}
+	partStats := map[string]bool{}
+	for _, m := range msgs {
+		body, err := os.ReadFile(m.MessagePath())
+		if err != nil {
+			t.Fatalf("read queued message: %v", err)
+		}
+		if !bytes.Contains(body, []byte("method=REPLY")) {
+			continue
+		}
+		for _, ps := range []string{"ACCEPTED", "DECLINED"} {
+			if bytes.Contains(body, []byte("PARTSTAT="+ps)) {
+				partStats[ps] = true
+			}
+		}
+	}
+	if !partStats["ACCEPTED"] || !partStats["DECLINED"] {
+		t.Fatalf("queued REPLY PARTSTATs %v, want both ACCEPTED and DECLINED", partStats)
+	}
+}
+
 func TestFlushOutboxSubjectInjection(t *testing.T) {
 	acc, cleanup := setupQueue(t)
 	defer cleanup()

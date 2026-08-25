@@ -13,6 +13,7 @@ import (
 
 	"github.com/mjl-/bstore"
 
+	"github.com/mjl-/mox/config"
 	"github.com/mjl-/mox/icalendar"
 	"github.com/mjl-/mox/message"
 	"github.com/mjl-/mox/mlog"
@@ -116,16 +117,27 @@ func outboxSummaryOrganizer(ics []byte) (summary, organizer string) {
 	return summary, organizer
 }
 
+// sendableDestinations returns the account addresses we may use as a From or
+// match an ORGANIZER against. A catchall destination ("@domain") is not an
+// address, and sorts before the real ones.
+func sendableDestinations(dests map[string]config.Destination) []string {
+	addrs := make([]string, 0, len(dests))
+	for addr := range dests {
+		if strings.HasPrefix(addr, "@") {
+			continue
+		}
+		addrs = append(addrs, addr)
+	}
+	sort.Strings(addrs)
+	return addrs
+}
+
 func firstDestination(acc *store.Account) string {
 	conf, ok := acc.Conf()
 	if !ok {
 		return ""
 	}
-	addrs := make([]string, 0, len(conf.Destinations))
-	for addr := range conf.Destinations {
-		addrs = append(addrs, addr)
-	}
-	sort.Strings(addrs)
+	addrs := sendableDestinations(conf.Destinations)
 	if len(addrs) == 0 {
 		return ""
 	}
@@ -315,7 +327,7 @@ func flushAfterMutation(ctx context.Context, acc *store.Account, err error) {
 // ../rfc/5546:3.2.2 REQUEST
 // ../rfc/5546:3.2.3 REPLY
 // ../rfc/5546:3.2.5 CANCEL
-func enqueueOutbox(tx *bstore.Tx, method string, ev store.CalendarEvent) error {
+func enqueueOutbox(tx *bstore.Tx, acc *store.Account, method string, ev store.CalendarEvent) error {
 	if !mox.IMIPEnabled() {
 		return nil
 	}
@@ -323,8 +335,14 @@ func enqueueOutbox(tx *bstore.Tx, method string, ev store.CalendarEvent) error {
 		return nil
 	}
 	switch method {
-	case "REQUEST":
-		if ev.Organizer == "" || len(ev.Attendees) == 0 {
+	case "REQUEST", "CANCEL":
+		// ../rfc/5546:1.4 only the Organizer sends REQUEST and CANCEL. A local
+		// write of an event organized elsewhere, e.g. a CalDAV PUT of a received
+		// invitation, must stay silent.
+		if !accountOwnsOrganizer(acc, ev.Organizer) {
+			return nil
+		}
+		if len(ev.Attendees) == 0 {
 			return nil
 		}
 		for _, att := range ev.Attendees {
@@ -340,25 +358,13 @@ func enqueueOutbox(tx *bstore.Tx, method string, ev store.CalendarEvent) error {
 			return nil
 		}
 		return insertOutboxRow(tx, method, ev, ev.Organizer)
-	case "CANCEL":
-		if len(ev.Attendees) == 0 {
-			return nil
-		}
-		for _, att := range ev.Attendees {
-			if AddressMatch(att.Address, ev.Organizer) {
-				continue
-			}
-			if err := insertOutboxRow(tx, method, ev, att.Address); err != nil {
-				return err
-			}
-		}
 	default:
 		return fmt.Errorf("unknown outbox method %q", method)
 	}
 	return nil
 }
 
-func enqueueCancelForUID(tx *bstore.Tx, ev store.CalendarEvent) error {
+func enqueueCancelForUID(tx *bstore.Tx, acc *store.Account, ev store.CalendarEvent) error {
 	master := ev
 	if ev.RecurrenceID != "" {
 		series, err := eventsByUID(tx, ev.UID)
@@ -377,36 +383,50 @@ func enqueueCancelForUID(tx *bstore.Tx, ev store.CalendarEvent) error {
 			return nil
 		}
 	}
-	return enqueueOutbox(tx, "CANCEL", master)
+	return enqueueOutbox(tx, acc, "CANCEL", master)
+}
+
+// sendableRecipient normalizes a calendar address to a mailbox address we can
+// actually submit to, or "" for values such as `urn:uuid:...` that never can be.
+func sendableRecipient(recipient string) string {
+	addr := normalizeCalendarAddress(recipient)
+	if addr == "" {
+		return ""
+	}
+	if _, err := smtp.ParseAddress(addr); err != nil {
+		return ""
+	}
+	return addr
 }
 
 func insertOutboxRow(tx *bstore.Tx, method string, ev store.CalendarEvent, recipient string) error {
-	recip := strings.ToLower(recipient)
+	recip := sendableRecipient(recipient)
 	if recip == "" {
 		return nil
 	}
-	key := fmt.Sprintf("%s|%s|%d|%s", method, ev.UID, ev.Sequence, recip)
-	ics := methodICS(method, ev.ICS)
-	row, err := bstore.QueryTx[store.CalendarOutbox](tx).FilterEqual("IdempotencyKey", key).Get()
-	if errors.Is(err, bstore.ErrAbsent) {
-		return tx.Insert(&store.CalendarOutbox{
-			Method:         method,
-			UID:            ev.UID,
-			Sequence:       ev.Sequence,
-			Recipient:      recip,
-			ICS:            ics,
-			IdempotencyKey: key,
-			Queued:         false,
-		})
+	// Respond does not bump SEQUENCE, so a REPLY is discriminated on the
+	// revision instead: every PARTSTAT change must reach the organizer.
+	discriminator := ev.Sequence
+	if method == "REPLY" {
+		discriminator = int(ev.Revision)
 	}
+	key := fmt.Sprintf("%s|%s|%d|%s", method, ev.UID, discriminator, recip)
+	exists, err := bstore.QueryTx[store.CalendarOutbox](tx).FilterEqual("IdempotencyKey", key).Exists()
 	if err != nil {
 		return err
 	}
-	if row.Queued || method != "REPLY" {
+	if exists {
 		return nil
 	}
-	row.ICS = ics
-	return tx.Update(&row)
+	return tx.Insert(&store.CalendarOutbox{
+		Method:         method,
+		UID:            ev.UID,
+		Sequence:       ev.Sequence,
+		Recipient:      recip,
+		ICS:            methodICS(method, ev.ICS),
+		IdempotencyKey: key,
+		Queued:         false,
+	})
 }
 
 // ../rfc/5545:3.7.3 PRODID is required
