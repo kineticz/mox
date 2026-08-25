@@ -148,6 +148,71 @@ func TestApplyIncoming(t *testing.T) {
 	}
 }
 
+func TestApplyIncomingEmptyOrganizerEmptyMailFrom(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	meta := IncomingMeta{MailFrom: "", MsgFrom: "spoof@example.com"}
+
+	req := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:imip-empty-org@mox\r\nSEQUENCE:1\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Unauth\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, req, meta)
+	if err != nil || result != "ignored-mismatch" {
+		t.Fatalf("empty ORGANIZER REQUEST: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "REQUEST", "imip-empty-org@mox", 1, "ignored-mismatch")
+	if _, err := svc.GetObject(testctx, acc, "imip-empty-org@mox"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty ORGANIZER REQUEST wrote object: %v", err)
+	}
+
+	seed := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:imip-empty-cancel@mox\r\nSEQUENCE:1\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Keep\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	if _, err := svc.PutObject(testctx, acc, "imip-empty-cancel@mox", seed, ""); err != nil {
+		t.Fatal(err)
+	}
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-empty-cancel@mox\r\nSEQUENCE:1\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err = ApplyIncoming(testctx, acc, cancel, meta)
+	if err != nil || result != "ignored-mismatch" {
+		t.Fatalf("empty ORGANIZER CANCEL: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "CANCEL", "imip-empty-cancel@mox", 1, "ignored-mismatch")
+	if _, err := svc.GetObject(testctx, acc, "imip-empty-cancel@mox"); err != nil {
+		t.Fatalf("empty ORGANIZER CANCEL deleted object: %v", err)
+	}
+}
+
+func TestApplyIncomingStaleCancel(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	seed := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:imip-stale-cancel@mox\r\nSEQUENCE:2\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Current\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	if _, err := svc.PutObject(testctx, acc, "imip-stale-cancel@mox", seed, ""); err != nil {
+		t.Fatal(err)
+	}
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-stale-cancel@mox\r\nSEQUENCE:1\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "ignored-stale" {
+		t.Fatalf("stale CANCEL: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "CANCEL", "imip-stale-cancel@mox", 1, "ignored-stale")
+	got := eventByUID(t, acc, "imip-stale-cancel@mox")
+	if got.Sequence != 2 {
+		t.Fatalf("stale CANCEL deleted or replaced event: %#v", got)
+	}
+}
+
+func TestApplyIncomingPutObjectInvalidRecordsInbound(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	cal := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:imip-invalid@mox\r\nSEQUENCE:1\r\nORGANIZER:mailto:org@mox.example\r\nSUMMARY:Bad\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cal, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "ignored-mismatch" {
+		t.Fatalf("invalid PutObject: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "REQUEST", "imip-invalid@mox", 1, "ignored-mismatch")
+	if _, err := (Service{}).GetObject(testctx, acc, "imip-invalid@mox"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid PutObject wrote object: %v", err)
+	}
+}
+
 func TestApplyIncomingDisabled(t *testing.T) {
 	acc := testAccount(t)
 	cal := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:imip-off@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")

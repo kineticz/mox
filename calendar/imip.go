@@ -49,7 +49,7 @@ func ApplyIncoming(ctx context.Context, acc *store.Account, cal icalendar.Calend
 	case "REPLY":
 		return applyReply(ctx, acc, vevents, uid, seq, meta, record)
 	default:
-		return applyCancel(ctx, acc, vevents, uid, meta, record)
+		return applyCancel(ctx, acc, vevents, uid, seq, meta, record)
 	}
 }
 
@@ -82,6 +82,9 @@ func applyRequest(ctx context.Context, acc *store.Account, cal icalendar.Calenda
 	}
 
 	if _, err := (Service{}).PutObject(ctx, acc, uid, cal.Serialize(), ""); err != nil {
+		if applyUserError(err) {
+			return record("ignored-mismatch")
+		}
 		return "", err
 	}
 	return record("applied")
@@ -113,23 +116,40 @@ func applyReply(ctx context.Context, acc *store.Account, vevents []icalendar.Com
 		return record("ignored-stale")
 	}
 	if _, err := (Service{}).Respond(ctx, acc, master.ID, master.Revision, addr, partStat); err != nil {
+		if applyUserError(err) {
+			return record("ignored-mismatch")
+		}
 		return "", err
 	}
 	return record("applied")
 }
 
-func applyCancel(ctx context.Context, acc *store.Account, vevents []icalendar.Component, uid string, meta IncomingMeta, record func(string) (string, error)) (string, error) {
+func applyCancel(ctx context.Context, acc *store.Account, vevents []icalendar.Component, uid string, seq int, meta IncomingMeta, record func(string) (string, error)) (string, error) {
 	if !envelopeMatches(componentOrganizer(vevents), meta) {
 		return record("ignored-mismatch")
 	}
-	err := (Service{}).DeleteObject(ctx, acc, uid, "")
-	if errors.Is(err, ErrNotFound) {
+	existing, err := storedEvents(ctx, acc, uid)
+	if err != nil {
+		return "", err
+	}
+	if len(existing) == 0 {
+		return record("ignored-mismatch")
+	}
+	if seq < maxSequence(existing) {
+		return record("ignored-stale")
+	}
+	err = (Service{}).DeleteObject(ctx, acc, uid, "")
+	if applyUserError(err) {
 		return record("ignored-mismatch")
 	}
 	if err != nil {
 		return "", err
 	}
 	return record("applied")
+}
+
+func applyUserError(err error) bool {
+	return errors.Is(err, ErrInvalid) || errors.Is(err, ErrLimit) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrNotEnabled)
 }
 
 func insertInbound(ctx context.Context, acc *store.Account, method, uid string, seq int, result string) error {
@@ -203,7 +223,20 @@ func componentOrganizer(vevents []icalendar.Component) string {
 }
 
 func envelopeMatches(organizer string, meta IncomingMeta) bool {
-	return AddressMatch(organizer, meta.MailFrom) || AddressMatch(organizer, meta.MsgFrom)
+	org := normalizeCalendarAddress(organizer)
+	if org == "" {
+		return false
+	}
+	mail := normalizeCalendarAddress(meta.MailFrom)
+	if mail != "" && mail == org {
+		return true
+	}
+	msg := normalizeCalendarAddress(meta.MsgFrom)
+	return msg != "" && msg == org
+}
+
+func normalizeCalendarAddress(s string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "mailto:")
 }
 
 func hasThisAndFuture(vevents []icalendar.Component) bool {
