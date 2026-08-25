@@ -104,6 +104,13 @@ func (c Calendar) Serialize() []byte {
 	return buf.Bytes()
 }
 
+// Serialize returns the iCalendar representation of this component, including nested components.
+func (c Component) Serialize() []byte {
+	var buf bytes.Buffer
+	c.writeTo(&buf)
+	return buf.Bytes()
+}
+
 // Prop returns the first property with the given name.
 func (c Component) Prop(name string) (Property, bool) {
 	name = strings.ToUpper(name)
@@ -160,10 +167,10 @@ func (c Component) Props(name string) []Property {
 }
 
 type parser struct {
-	cal      Calendar
-	stack    []Component
-	inCal    bool
-	done     bool
+	cal   Calendar
+	stack []Component
+	inCal bool
+	done  bool
 }
 
 func (p *parser) finish() error {

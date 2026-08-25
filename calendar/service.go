@@ -1,10 +1,12 @@
 package calendar
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +44,12 @@ type EventInput struct {
 	EXDATE       []string
 	Attendees    []store.CalendarAttendee
 	Unknown      []icalendar.Property
+}
+
+type CalendarObject struct {
+	UID  string
+	ETag string // `"rev-{maxRevision}"` including quotes
+	ICS  []byte // full VCALENDAR
 }
 
 type Service struct{}
@@ -302,6 +310,183 @@ func (Service) Query(ctx context.Context, acc *store.Account, from, to time.Time
 		to = maxTo
 	}
 	return query(ctx, acc, from, to)
+}
+
+func (Service) GetObject(ctx context.Context, acc *store.Account, uid string) (obj CalendarObject, err error) {
+	if !mox.CalendarEnabled() {
+		return obj, ErrNotEnabled
+	}
+	if uid == "" {
+		return obj, ErrNotFound
+	}
+	err = acc.DB.Read(ctx, func(tx *bstore.Tx) error {
+		events, err := eventsByUID(tx, uid)
+		if err != nil {
+			return err
+		}
+		if len(events) == 0 {
+			return ErrNotFound
+		}
+		obj = calendarObject(uid, events)
+		return nil
+	})
+	return obj, err
+}
+
+func (Service) ListObjects(ctx context.Context, acc *store.Account) ([]CalendarObject, error) {
+	if !mox.CalendarEnabled() {
+		return nil, ErrNotEnabled
+	}
+	var objs []CalendarObject
+	err := acc.DB.Read(ctx, func(tx *bstore.Tx) error {
+		cal, err := acc.DefaultCalendar(tx)
+		if err != nil {
+			return err
+		}
+		events, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{CalendarID: cal.ID}).List()
+		if err != nil {
+			return err
+		}
+		byUID := map[string][]store.CalendarEvent{}
+		var uids []string
+		for _, ev := range events {
+			if _, ok := byUID[ev.UID]; !ok {
+				uids = append(uids, ev.UID)
+			}
+			byUID[ev.UID] = append(byUID[ev.UID], ev)
+		}
+		sort.Strings(uids)
+		for _, uid := range uids {
+			objs = append(objs, calendarObject(uid, byUID[uid]))
+		}
+		return nil
+	})
+	return objs, err
+}
+
+func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ics []byte, ifMatch string) (obj CalendarObject, rerr error) {
+	if !mox.CalendarEnabled() {
+		return obj, ErrNotEnabled
+	}
+	comps, err := objectVEVENTs(ics)
+	if err != nil {
+		return obj, err
+	}
+	if len(comps) > Limits().MaxComponents {
+		return obj, fmt.Errorf("%w: too many components", ErrLimit)
+	}
+
+	var inputs []EventInput
+	var fragments [][]byte
+	seenRID := map[string]bool{}
+	var exceptions int
+	for _, comp := range comps {
+		if comp.UID() != uid {
+			return obj, fmt.Errorf("%w: UID mismatch", ErrInvalid)
+		}
+		in, err := eventInputFromComponent(comp)
+		if err != nil {
+			return obj, err
+		}
+		if err := validateInput(in); err != nil {
+			return obj, err
+		}
+		if seenRID[in.RecurrenceID] {
+			return obj, fmt.Errorf("%w: duplicate RECURRENCE-ID", ErrInvalid)
+		}
+		seenRID[in.RecurrenceID] = true
+		n, err := inputExceptionCount(in)
+		if err != nil {
+			return obj, err
+		}
+		exceptions += n
+		frag := comp.Serialize()
+		if len(frag) > Limits().MaxICSBytes {
+			return obj, fmt.Errorf("%w: ICS is too large", ErrLimit)
+		}
+		inputs = append(inputs, in)
+		fragments = append(fragments, frag)
+	}
+	if exceptions > Limits().MaxExceptions {
+		return obj, fmt.Errorf("%w: too many exceptions", ErrLimit)
+	}
+
+	acc.WithWLock(func() {
+		rerr = acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+			calendar, err := acc.DefaultCalendar(tx)
+			if err != nil {
+				return err
+			}
+			existing, err := eventsByUID(tx, uid)
+			if err != nil {
+				return err
+			}
+			if len(existing) == 0 {
+				if ifMatch != "" && ifMatch != "*" {
+					return ErrNotFound
+				}
+			} else {
+				if ifMatch == "*" {
+					return ErrStale
+				}
+				if ifMatch != "" && ifMatch != objectETag(existing) {
+					return ErrStale
+				}
+				if _, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).Delete(); err != nil {
+					return err
+				}
+			}
+
+			now := time.Now().UTC()
+			inserted := make([]store.CalendarEvent, 0, len(inputs))
+			for i, in := range inputs {
+				ev := eventFromInput(in)
+				ev.CalendarID = calendar.ID
+				ev.Revision = 1
+				ev.Created = now
+				ev.LastModified = now
+				ev.ICS = fragments[i]
+				if err := tx.Insert(&ev); err != nil {
+					return err
+				}
+				inserted = append(inserted, ev)
+			}
+			if err := bumpCalendarCTag(tx, acc); err != nil {
+				return err
+			}
+			obj = calendarObject(uid, inserted)
+			return nil
+		})
+	})
+	return obj, rerr
+}
+
+func (Service) DeleteObject(ctx context.Context, acc *store.Account, uid string, ifMatch string) (rerr error) {
+	if !mox.CalendarEnabled() {
+		return ErrNotEnabled
+	}
+	if uid == "" {
+		return ErrNotFound
+	}
+	acc.WithWLock(func() {
+		rerr = acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+			events, err := eventsByUID(tx, uid)
+			if err != nil {
+				return err
+			}
+			if len(events) == 0 {
+				return ErrNotFound
+			}
+			if ifMatch != "" && ifMatch != objectETag(events) {
+				return ErrStale
+			}
+			if _, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).Delete(); err != nil {
+				return err
+			}
+			return bumpCalendarCTag(tx, acc)
+		})
+	})
+	return rerr
 }
 
 func validateInput(in EventInput) error {
@@ -610,4 +795,241 @@ func bumpCalendarCTag(tx *bstore.Tx, acc *store.Account) error {
 	}
 	c.CTag++
 	return tx.Update(&c)
+}
+
+func objectVEVENTs(ics []byte) ([]icalendar.Component, error) {
+	cal, err := icalendar.Parse(ics)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	var vevents []icalendar.Component
+	for _, c := range cal.Components {
+		switch c.Name {
+		case "VEVENT":
+			vevents = append(vevents, c)
+		case "VTIMEZONE":
+			continue
+		default:
+			return nil, fmt.Errorf("%w: unsupported component %s", ErrInvalid, c.Name)
+		}
+	}
+	if len(vevents) == 0 {
+		return nil, fmt.Errorf("%w: no VEVENT", ErrInvalid)
+	}
+	if _, _, err := icalendar.SplitSeries(vevents); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return vevents, nil
+}
+
+func eventInputFromComponent(comp icalendar.Component) (EventInput, error) {
+	in := EventInput{
+		UID:      comp.UID(),
+		Sequence: comp.Sequence(),
+	}
+	if p, ok := comp.Prop("RECURRENCE-ID"); ok {
+		in.RecurrenceID = p.Value
+	}
+	if p, ok := comp.Prop("SUMMARY"); ok {
+		in.Summary = p.Value
+	}
+	if p, ok := comp.Prop("DESCRIPTION"); ok {
+		in.Description = p.Value
+	}
+	if p, ok := comp.Prop("LOCATION"); ok {
+		in.Location = p.Value
+	}
+	if p, ok := comp.Prop("STATUS"); ok {
+		in.Status = p.Value
+	}
+	if p, ok := comp.Prop("CLASS"); ok {
+		in.Class = p.Value
+	}
+	if p, ok := comp.Prop("ORGANIZER"); ok {
+		in.Organizer = p.Value
+	}
+	if p, ok := comp.Prop("RRULE"); ok {
+		in.RRULE = p.Value
+	}
+
+	startProp, ok := comp.Prop("DTSTART")
+	if !ok {
+		return EventInput{}, fmt.Errorf("%w: DTSTART is required", ErrInvalid)
+	}
+	start, err := icalendar.ParseDateTime(startProp)
+	if err != nil {
+		return EventInput{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	in.Start = start
+
+	if p, ok := comp.Prop("DTEND"); ok {
+		end, err := icalendar.ParseDateTime(p)
+		if err != nil {
+			return EventInput{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		in.End = end
+	} else if p, ok := comp.Prop("DURATION"); ok {
+		d, err := parseICSDuration(p.Value)
+		if err != nil {
+			return EventInput{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		end := start
+		end.UTC = start.UTC.Add(d)
+		in.End = end
+	} else if start.DateOnly {
+		in.End = start
+	} else {
+		return EventInput{}, fmt.Errorf("%w: DTEND or DURATION is required", ErrInvalid)
+	}
+
+	for _, p := range comp.Props("RDATE") {
+		in.RDATE = append(in.RDATE, p.Value)
+	}
+	for _, p := range comp.Props("EXDATE") {
+		in.EXDATE = append(in.EXDATE, p.Value)
+	}
+	for _, p := range comp.Props("ATTENDEE") {
+		att := store.CalendarAttendee{Address: p.Value}
+		if v, ok := p.Param("CN"); ok {
+			att.Name = v
+		}
+		if v, ok := p.Param("ROLE"); ok {
+			att.Role = v
+		}
+		if v, ok := p.Param("PARTSTAT"); ok {
+			att.PartStat = v
+		}
+		if v, ok := p.Param("RSVP"); ok {
+			att.RSVP = strings.EqualFold(v, "TRUE")
+		}
+		in.Attendees = append(in.Attendees, att)
+	}
+	for _, p := range comp.Properties {
+		name := strings.ToUpper(p.Name)
+		if canonicalProperty[name] {
+			continue
+		}
+		in.Unknown = append(in.Unknown, p)
+	}
+	return in, nil
+}
+
+func parseICSDuration(s string) (time.Duration, error) {
+	orig := s
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	neg := false
+	switch s[0] {
+	case '-':
+		neg = true
+		s = s[1:]
+	case '+':
+		s = s[1:]
+	}
+	if len(s) < 2 || s[0] != 'P' {
+		return 0, fmt.Errorf("invalid duration %q", orig)
+	}
+	s = s[1:]
+	var total time.Duration
+	inTime := false
+	sawWeek := false
+	sawDate := false
+	for len(s) > 0 {
+		if s[0] == 'T' {
+			if inTime {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			inTime = true
+			s = s[1:]
+			if s == "" {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			continue
+		}
+		i := 0
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == 0 || i >= len(s) {
+			return 0, fmt.Errorf("invalid duration %q", orig)
+		}
+		n, err := strconv.Atoi(s[:i])
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", orig)
+		}
+		unit := s[i]
+		s = s[i+1:]
+		switch unit {
+		case 'W':
+			if inTime || sawDate || sawWeek {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			sawWeek = true
+			total += time.Duration(n) * 7 * 24 * time.Hour
+		case 'D':
+			if inTime || sawWeek {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			sawDate = true
+			total += time.Duration(n) * 24 * time.Hour
+		case 'H':
+			if !inTime || sawWeek {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			total += time.Duration(n) * time.Hour
+		case 'M':
+			if !inTime || sawWeek {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			total += time.Duration(n) * time.Minute
+		case 'S':
+			if !inTime || sawWeek {
+				return 0, fmt.Errorf("invalid duration %q", orig)
+			}
+			total += time.Duration(n) * time.Second
+		default:
+			return 0, fmt.Errorf("invalid duration %q", orig)
+		}
+	}
+	if neg {
+		total = -total
+	}
+	return total, nil
+}
+
+func objectETag(events []store.CalendarEvent) string {
+	var max int64
+	for _, ev := range events {
+		if ev.Revision > max {
+			max = ev.Revision
+		}
+	}
+	return fmt.Sprintf(`"rev-%d"`, max)
+}
+
+func wrapICS(fragments [][]byte) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mox//caldav//EN\r\n")
+	for _, f := range fragments {
+		buf.Write(f)
+	}
+	buf.WriteString("END:VCALENDAR\r\n")
+	return buf.Bytes()
+}
+
+func calendarObject(uid string, events []store.CalendarEvent) CalendarObject {
+	events = append([]store.CalendarEvent(nil), events...)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].RecurrenceID < events[j].RecurrenceID
+	})
+	fragments := make([][]byte, len(events))
+	for i, ev := range events {
+		fragments[i] = ev.ICS
+	}
+	return CalendarObject{
+		UID:  uid,
+		ETag: objectETag(events),
+		ICS:  wrapICS(fragments),
+	}
 }

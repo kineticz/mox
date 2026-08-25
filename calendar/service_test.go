@@ -1,6 +1,7 @@
 package calendar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -527,5 +528,44 @@ func TestCreateRejectsDuplicateMasterUID(t *testing.T) {
 	_, err = svc.Create(testctx, acc, EventInput{UID: "dup@mox", Start: start, End: end})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("got %v, expected %v", err, ErrInvalid)
+	}
+}
+
+func TestPutGetObjectRoundTripVALARM(t *testing.T) {
+	acc := testAccount(t)
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:obj1@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Hello\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:n\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	svc := Service{}
+	obj, err := svc.PutObject(testctx, acc, "obj1@mox", ics, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.ETag == "" || obj.UID != "obj1@mox" {
+		t.Fatalf("%#v", obj)
+	}
+	got, err := svc.GetObject(testctx, acc, "obj1@mox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.ICS, []byte("BEGIN:VALARM\r\n")) || !bytes.Contains(got.ICS, []byte("SUMMARY:Hello\r\n")) {
+		t.Fatalf("%s", got.ICS)
+	}
+	_, err = svc.PutObject(testctx, acc, "obj1@mox", ics, `"rev-999"`)
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("got %v", err)
+	}
+	if err := svc.DeleteObject(testctx, acc, "obj1@mox", got.ETag); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetObject(testctx, acc, "obj1@mox"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPutObjectRejectsUIDMismatch(t *testing.T) {
+	acc := testAccount(t)
+	ics := []byte("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:other@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	_, err := Service{}.PutObject(testctx, acc, "obj1@mox", ics, "")
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("got %v", err)
 	}
 }

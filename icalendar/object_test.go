@@ -1,6 +1,7 @@
 package icalendar
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -70,6 +71,18 @@ func TestParseTopLevelVTODOPreserved(t *testing.T) {
 	}
 	if len(cal2.Components) != 1 || cal2.Components[0].Name != "VTODO" {
 		t.Fatalf("round-trip lost VTODO: %#v", cal2.Components)
+	}
+}
+
+func TestComponentSerializeIncludesVALARM(t *testing.T) {
+	raw := []byte("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:n\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	cal, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cal.Components[0].Serialize()
+	if !bytes.Contains(got, []byte("BEGIN:VALARM\r\n")) {
+		t.Fatalf("%s", got)
 	}
 }
 
