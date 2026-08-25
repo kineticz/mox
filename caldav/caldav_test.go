@@ -429,3 +429,72 @@ func TestReport(t *testing.T) {
 		t.Fatalf("missing hrefs: %q", got)
 	}
 }
+
+func putReportEvent(t *testing.T, uid, dtstart, dtend string) {
+	t.Helper()
+	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:" + uid + "\r\nDTSTART:" + dtstart + "\r\nDTEND:" + dtend + "\r\nSUMMARY:" + uid + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	path := "/mjl/calendars/default/" + url.PathEscape(uid) + ".ics"
+	hdr := http.Header{}
+	hdr.Set("Content-Type", "text/calendar")
+	rec := objectReq(t, http.MethodPut, path, ics, hdr)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("put %s got %d body %q", uid, rec.Code, rec.Body.String())
+	}
+}
+
+func calendarQueryTimeRange(start, end string) string {
+	attrs := ""
+	if start != "" {
+		attrs += ` start="` + start + `"`
+	}
+	if end != "" {
+		attrs += ` end="` + end + `"`
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop>
+    <C:calendar-data/>
+  </D:prop>
+  <C:filter>
+    <C:comp-filter name="VCALENDAR">
+      <C:comp-filter name="VEVENT">
+        <C:time-range` + attrs + `/>
+      </C:comp-filter>
+    </C:comp-filter>
+  </C:filter>
+</C:calendar-query>`
+}
+
+func TestReportTimeRangeOmittedStartKeepsRecentEvent(t *testing.T) {
+	setupCalDAV(t, true, true)
+	putReportEvent(t, "day1@mox", "20260815T090000Z", "20260815T100000Z")
+
+	rec := report(t, "/mjl/calendars/default/", calendarQueryTimeRange("", "2026-08-16T00:00:00Z"))
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "UID:day1@mox") {
+		t.Fatalf("missing 2026 event: %q", rec.Body.String())
+	}
+}
+
+func TestReportTimeRangeWiderThanHorizonKeepsRecentEvent(t *testing.T) {
+	setupCalDAV(t, true, true)
+	putReportEvent(t, "day1@mox", "20260815T090000Z", "20260815T100000Z")
+
+	rec := report(t, "/mjl/calendars/default/", calendarQueryTimeRange("1970-01-01T00:00:00Z", "2026-08-16T00:00:00Z"))
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "UID:day1@mox") {
+		t.Fatalf("missing 2026 event: %q", rec.Body.String())
+	}
+}
+
+func TestReportTimeRangeNeitherStartNorEndBadRequest(t *testing.T) {
+	setupCalDAV(t, true, true)
+	rec := report(t, "/mjl/calendars/default/", calendarQueryTimeRange("", ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+}

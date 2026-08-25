@@ -71,8 +71,13 @@ func (h handler) reportQuery(w http.ResponseWriter, r *http.Request, acc *store.
 			return
 		}
 	} else {
-		from := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
-		to := time.Now().UTC().AddDate(0, 0, calendar.Limits().ExpansionHorizonDays)
+		if rep.start == "" && rep.end == "" {
+			http.Error(w, "400 - bad request - invalid time-range", http.StatusBadRequest)
+			return
+		}
+		horizonDays := calendar.Limits().ExpansionHorizonDays
+		var from time.Time
+		to := time.Now().UTC().AddDate(0, 0, horizonDays)
 		if rep.start != "" {
 			t, err := parseReportTime(rep.start)
 			if err != nil {
@@ -88,6 +93,11 @@ func (h handler) reportQuery(w http.ResponseWriter, r *http.Request, acc *store.
 				return
 			}
 			to = t
+		}
+		// Keep the recent end of the window. Service.Query clamps `to` from `from`,
+		// so a 1970 start (or a multi-year client range) would drop current events.
+		if rep.start == "" || to.After(from.AddDate(0, 0, horizonDays)) {
+			from = to.AddDate(0, 0, -horizonDays)
 		}
 		insts, err := svc.Query(r.Context(), acc, from, to)
 		if err != nil {

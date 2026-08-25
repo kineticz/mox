@@ -590,3 +590,64 @@ func TestPutObjectReplaceIncrementsETag(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func eventByUID(t *testing.T, acc *store.Account, uid string) store.CalendarEvent {
+	t.Helper()
+	var ev store.CalendarEvent
+	if err := acc.DB.Read(testctx, func(tx *bstore.Tx) error {
+		var err error
+		ev, err = bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).Get()
+		return err
+	}); err != nil {
+		t.Fatalf("load %s: %v", uid, err)
+	}
+	return ev
+}
+
+func TestUpdatePreservesVALARMFromPutObject(t *testing.T) {
+	acc := testAccount(t)
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:obj1@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Hello\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:n\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	svc := Service{}
+	if _, err := svc.PutObject(testctx, acc, "obj1@mox", ics, ""); err != nil {
+		t.Fatal(err)
+	}
+	ev := eventByUID(t, acc, "obj1@mox")
+	start, end := testTimes()
+	if _, err := svc.Update(testctx, acc, ev.ID, EventInput{
+		UID: ev.UID, Revision: ev.Revision, Summary: "Updated", Start: start, End: end,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetObject(testctx, acc, "obj1@mox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.ICS, []byte("BEGIN:VALARM\r\n")) {
+		t.Fatalf("VALARM dropped:\n%s", got.ICS)
+	}
+}
+
+func TestUpdateDoesNotEmitDURATIONWithDTEND(t *testing.T) {
+	acc := testAccount(t)
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:obj1@mox\r\nDTSTART:20260815T090000Z\r\nDURATION:PT1H\r\nSUMMARY:Hello\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	svc := Service{}
+	if _, err := svc.PutObject(testctx, acc, "obj1@mox", ics, ""); err != nil {
+		t.Fatal(err)
+	}
+	ev := eventByUID(t, acc, "obj1@mox")
+	start, end := testTimes()
+	if _, err := svc.Update(testctx, acc, ev.ID, EventInput{
+		UID: ev.UID, Revision: ev.Revision, Summary: "Updated", Start: start, End: end,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetObject(testctx, acc, "obj1@mox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasDuration := bytes.Contains(got.ICS, []byte("DURATION"))
+	hasDTEnd := bytes.Contains(got.ICS, []byte("DTEND"))
+	if hasDuration && hasDTEnd {
+		t.Fatalf("both DURATION and DTEND:\n%s", got.ICS)
+	}
+}

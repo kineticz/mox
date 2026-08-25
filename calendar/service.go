@@ -111,7 +111,7 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 			ev.Revision = 1
 			ev.Created = now
 			ev.LastModified = now
-			ics, err := serializeEvent(ev, in.Unknown)
+			ics, err := serializeEvent(ev, in.Unknown, nil)
 			if err != nil {
 				return err
 			}
@@ -174,6 +174,7 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 			if unknown == nil {
 				unknown = unknownProperties(ev.ICS)
 			}
+			nested := nestedComponents(ev.ICS)
 			updated := eventFromInput(in)
 			updated.ID = ev.ID
 			updated.CalendarID = ev.CalendarID
@@ -181,7 +182,7 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 			updated.LastModified = time.Now().UTC()
 			updated.Revision = ev.Revision + 1
 			updated.Sequence = ev.Sequence + 1
-			updated.ICS, err = serializeEvent(updated, unknown)
+			updated.ICS, err = serializeEvent(updated, unknown, nested)
 			if err != nil {
 				return err
 			}
@@ -233,12 +234,13 @@ func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revisi
 			}
 
 			unknown := unknownProperties(ev.ICS)
+			nested := nestedComponents(ev.ICS)
 			updated := ev
 			updated.Attendees = attendees
 			updated.LastModified = time.Now().UTC()
 			updated.Revision = ev.Revision + 1
 			var err error
-			updated.ICS, err = serializeEvent(updated, unknown)
+			updated.ICS, err = serializeEvent(updated, unknown, nested)
 			if err != nil {
 				return err
 			}
@@ -612,7 +614,7 @@ func eventFromInput(in EventInput) store.CalendarEvent {
 	}
 }
 
-func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property) ([]byte, error) {
+func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property, nested []icalendar.Component) ([]byte, error) {
 	props := []icalendar.Property{
 		{Name: "UID", Value: ev.UID},
 		{Name: "SEQUENCE", Value: strconv.Itoa(ev.Sequence)},
@@ -655,9 +657,9 @@ func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property) ([]byt
 	}
 	props = append(props, unknown...)
 	intendedNames := propertyNameCounts(props)
-	full := icalendar.Calendar{Components: []icalendar.Component{{Name: "VEVENT", Properties: props}}}.Serialize()
+	full := icalendar.Calendar{Components: []icalendar.Component{{Name: "VEVENT", Properties: props, Components: nested}}}.Serialize()
 	parsed, err := icalendar.Parse(full)
-	if err != nil || len(parsed.Components) != 1 || parsed.Components[0].Name != "VEVENT" || len(parsed.Components[0].Components) != 0 {
+	if err != nil || len(parsed.Components) != 1 || parsed.Components[0].Name != "VEVENT" {
 		return nil, fmt.Errorf("%w: invalid serialized VEVENT", ErrInvalid)
 	}
 	if !samePropertyNames(intendedNames, propertyNameCounts(parsed.Components[0].Properties)) {
@@ -671,15 +673,23 @@ func serializeEvent(ev store.CalendarEvent, unknown []icalendar.Property) ([]byt
 	return full[len(prefix) : len(full)-len(suffix)], nil
 }
 
-func unknownProperties(ics []byte) []icalendar.Property {
+func parseStoredVEVENT(ics []byte) (icalendar.Component, bool) {
 	wrapped := append([]byte("BEGIN:VCALENDAR\r\n"), ics...)
 	wrapped = append(wrapped, []byte("END:VCALENDAR\r\n")...)
 	cal, err := icalendar.Parse(wrapped)
 	if err != nil || len(cal.Components) != 1 {
+		return icalendar.Component{}, false
+	}
+	return cal.Components[0], true
+}
+
+func unknownProperties(ics []byte) []icalendar.Property {
+	comp, ok := parseStoredVEVENT(ics)
+	if !ok {
 		return nil
 	}
 	var unknown []icalendar.Property
-	for _, p := range cal.Components[0].Properties {
+	for _, p := range comp.Properties {
 		if !canonicalProperty[p.Name] {
 			unknown = append(unknown, p)
 		}
@@ -687,10 +697,18 @@ func unknownProperties(ics []byte) []icalendar.Property {
 	return unknown
 }
 
+func nestedComponents(ics []byte) []icalendar.Component {
+	comp, ok := parseStoredVEVENT(ics)
+	if !ok {
+		return nil
+	}
+	return comp.Components
+}
+
 var canonicalProperty = map[string]bool{
 	"UID": true, "RECURRENCE-ID": true, "SEQUENCE": true, "SUMMARY": true,
 	"DESCRIPTION": true, "LOCATION": true, "STATUS": true, "CLASS": true,
-	"ORGANIZER": true, "DTSTART": true, "DTEND": true, "RRULE": true,
+	"ORGANIZER": true, "DTSTART": true, "DTEND": true, "DURATION": true, "RRULE": true,
 	"RDATE": true, "EXDATE": true, "ATTENDEE": true,
 }
 
