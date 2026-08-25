@@ -358,8 +358,8 @@ func recurrenceBoundUTC(ev store.CalendarEvent) (*time.Time, error) {
 		return nil, err
 	}
 	from := ev.StartUTC
-	to := from.AddDate(0, 0, Limits().ExpansionHorizonDays)
-	inst, err := icalendar.Expand(start, r, nil, exdates, from, to, Limits().MaxRecurrenceInstances)
+	to := from.AddDate(r.Count*r.Interval+1, 0, 0)
+	inst, err := icalendar.Expand(start, r, nil, exdates, from, to, r.Count)
 	if err != nil {
 		return nil, err
 	}

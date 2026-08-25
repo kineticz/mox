@@ -727,6 +727,47 @@ func TestApplyIncomingThisAndFutureCancelAfterCount(t *testing.T) {
 	}
 }
 
+func TestApplyIncomingThisAndFutureCancelYearlyPastHorizon(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)}
+	end := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-cancel-yearly@mox",
+		Summary:   "Yearly",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=YEARLY;COUNT=5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-cancel-yearly@mox\r\nSEQUENCE:0\r\nDTSTART:20290815T090000Z\r\nDTEND:20290815T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20290815T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL yearly: result=%q err=%v", result, err)
+	}
+
+	keepFrom := time.Date(2028, 8, 15, 0, 0, 0, 0, time.UTC)
+	keep, err := svc.Query(testctx, acc, keepFrom, keepFrom.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keep) != 1 || !keep[0].Start.UTC.Equal(time.Date(2028, 8, 15, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("2028 clipped by Query horizon bound: %#v", keep)
+	}
+	cutFrom := time.Date(2029, 8, 15, 0, 0, 0, 0, time.UTC)
+	cut, err := svc.Query(testctx, acc, cutFrom, cutFrom.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cut) != 0 {
+		t.Fatalf("2029 Recurrence-ID still queryable: %#v", cut)
+	}
+}
+
 func TestApplyIncomingStaleCancel(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
