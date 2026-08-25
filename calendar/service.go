@@ -421,6 +421,7 @@ func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ic
 			if err != nil {
 				return err
 			}
+			revision := int64(1)
 			if len(existing) == 0 {
 				if ifMatch != "" && ifMatch != "*" {
 					return ErrNotFound
@@ -432,6 +433,11 @@ func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ic
 				if ifMatch != "" && ifMatch != objectETag(existing) {
 					return ErrStale
 				}
+				for _, ev := range existing {
+					if ev.Revision >= revision {
+						revision = ev.Revision + 1
+					}
+				}
 				if _, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: uid}).Delete(); err != nil {
 					return err
 				}
@@ -442,7 +448,7 @@ func (Service) PutObject(ctx context.Context, acc *store.Account, uid string, ic
 			for i, in := range inputs {
 				ev := eventFromInput(in)
 				ev.CalendarID = calendar.ID
-				ev.Revision = 1
+				ev.Revision = revision
 				ev.Created = now
 				ev.LastModified = now
 				ev.ICS = fragments[i]

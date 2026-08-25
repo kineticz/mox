@@ -569,3 +569,24 @@ func TestPutObjectRejectsUIDMismatch(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestPutObjectReplaceIncrementsETag(t *testing.T) {
+	acc := testAccount(t)
+	ics := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:obj1@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Hello\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	svc := Service{}
+	first, err := svc.PutObject(testctx, acc, "obj1@mox", ics, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.PutObject(testctx, acc, "obj1@mox", ics, first.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ETag == `"rev-1"` {
+		t.Fatalf("replace etag %s", second.ETag)
+	}
+	_, err = svc.PutObject(testctx, acc, "obj1@mox", ics, `"rev-1"`)
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("got %v", err)
+	}
+}
