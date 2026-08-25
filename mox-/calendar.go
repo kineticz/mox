@@ -61,3 +61,7 @@ func CalendarEnabled() bool {
 func CalDAVEnabled() bool {
 	return Conf.Calendar.EnableCalendar && Conf.Calendar.EnableCalDAV
 }
+
+func IMIPEnabled() bool {
+	return Conf.Calendar.EnableCalendar && Conf.Calendar.EnableIMIP
+}

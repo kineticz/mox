@@ -4,7 +4,7 @@ package config
 type CalendarFile struct {
 	EnableCalendar  bool `sconf:"optional" sconf-doc:"Enable the server-side calendar store, calendar JSON API and default per-account calendar. Default: false."`
 	EnableCalDAV    bool `sconf:"optional" sconf-doc:"Enable CalDAV. Requires EnableCalendar. Default: false."`
-	EnableIMIP      bool `sconf:"optional" sconf-doc:"Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false. Unused in phase 1."`
+	EnableIMIP      bool `sconf:"optional" sconf-doc:"Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false."`
 	EnableScheduled bool `sconf:"optional" sconf-doc:"Enable the ScheduledMessage service and virtual IMAP Scheduled mailbox. Default: false. Unused in phase 1."`
 
 	MaxICSBytes            int `sconf:"optional" sconf-doc:"Maximum iCalendar input size in bytes. Default: 1048576 (1 MiB)."`

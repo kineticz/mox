@@ -112,6 +112,26 @@ func (c Component) Serialize() []byte {
 }
 
 // Prop returns the first property with the given name.
+func (c Calendar) Prop(name string) (Property, bool) {
+	name = strings.ToUpper(name)
+	for _, p := range c.Properties {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Property{}, false
+}
+
+// Method returns the first METHOD property value, uppercased, or "" if absent.
+func (c Calendar) Method() string {
+	p, ok := c.Prop("METHOD")
+	if !ok {
+		return ""
+	}
+	return strings.ToUpper(p.Value)
+}
+
+// Prop returns the first property with the given name.
 func (c Component) Prop(name string) (Property, bool) {
 	name = strings.ToUpper(name)
 	for _, p := range c.Properties {

@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestCalendarMethod(t *testing.T) {
+	cal, err := Parse([]byte("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:x@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"))
+	if err != nil || cal.Method() != "REQUEST" {
+		t.Fatalf("%v %#v", err, cal)
+	}
+}
+
 func TestParseSerializeRoundTripUnknownProperty(t *testing.T) {
 	in := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//mox//calendar//EN\r\nBEGIN:VEVENT\r\nUID:one@example.com\r\nDTSTAMP:20260101T120000Z\r\nDTSTART:20260102T090000Z\r\nDTEND:20260102T100000Z\r\nSUMMARY:Hello\r\nX-MOX-CUSTOM:keep-me\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
 	cal, err := Parse(in)

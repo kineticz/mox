@@ -75,6 +75,23 @@ func TestDescribeCalendarDoesNotAffectStatic(t *testing.T) {
 	}
 }
 
+func TestIMIPEnabledRequiresBothFlags(t *testing.T) {
+	orig := Conf.Calendar
+	t.Cleanup(func() { Conf.Calendar = orig })
+	Conf.Calendar = config.CalendarFile{}
+	if IMIPEnabled() {
+		t.Fatal("disabled")
+	}
+	Conf.Calendar.EnableIMIP = true
+	if IMIPEnabled() {
+		t.Fatal("imip without calendar")
+	}
+	Conf.Calendar.EnableCalendar = true
+	if !IMIPEnabled() {
+		t.Fatal("both true")
+	}
+}
+
 func TestCalDAVEnabledRequiresBothFlags(t *testing.T) {
 	orig := Conf.Calendar
 	t.Cleanup(func() { Conf.Calendar = orig })
