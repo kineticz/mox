@@ -643,6 +643,90 @@ func TestApplyIncomingThisAndFutureCancel(t *testing.T) {
 	}
 }
 
+func TestApplyIncomingThisAndFutureCancelFromDTSTART(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)}
+	end := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-cancel-start@mox",
+		Summary:   "Series",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=DAILY;COUNT=5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-cancel-start@mox\r\nSEQUENCE:0\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20260815T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL from DTSTART: result=%q err=%v", result, err)
+	}
+
+	from := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	inst, err := svc.Query(testctx, acc, from, from.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inst) != 0 {
+		t.Fatalf("DTSTART instant still queryable: %#v", inst)
+	}
+	later, err := svc.Query(testctx, acc, from.AddDate(0, 0, 1), from.AddDate(0, 0, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(later) != 0 {
+		t.Fatalf("later instances still queryable: %#v", later)
+	}
+}
+
+func TestApplyIncomingThisAndFutureCancelAfterCount(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)}
+	end := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
+	if _, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-cancel-after@mox",
+		Summary:   "Series",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=DAILY;COUNT=5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-cancel-after@mox\r\nSEQUENCE:0\r\nDTSTART:20260825T090000Z\r\nDTEND:20260825T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20260825T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL after COUNT: result=%q err=%v", result, err)
+	}
+
+	from := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	all, err := svc.Query(testctx, acc, from, from.AddDate(0, 0, 12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("series grew or shrank: %d instances %#v", len(all), all)
+	}
+	last := time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC)
+	if !all[4].Start.UTC.Equal(last) {
+		t.Fatalf("last instance %#v, want %v", all[4], last)
+	}
+	grown, err := svc.Query(testctx, acc, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grown) != 0 {
+		t.Fatalf("THISANDFUTURE CANCEL after COUNT grew series: %#v", grown)
+	}
+}
+
 func TestApplyIncomingStaleCancel(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)

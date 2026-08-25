@@ -245,7 +245,26 @@ func applyThisAndFutureCancel(ctx context.Context, acc *store.Account, existing 
 		return record("ignored-mismatch")
 	}
 
-	until := rid.UTC.Add(-time.Second).UTC().Format("20060102T150405Z")
+	if !rid.UTC.After(master.StartUTC) {
+		err := deleteObject(ctx, acc, master.UID, "", false)
+		if applyUserError(err) {
+			return record("ignored-mismatch")
+		}
+		if err != nil {
+			return "", err
+		}
+		return record("applied")
+	}
+
+	untilTime := rid.UTC.Add(-time.Second)
+	bound, err := recurrenceBoundUTC(*master)
+	if err != nil {
+		return record("ignored-mismatch")
+	}
+	if bound != nil && untilTime.After(*bound) {
+		untilTime = *bound
+	}
+	until := untilTime.UTC().Format("20060102T150405Z")
 	newRRULE := rruleWithUntil(master.RRULE, until)
 	if _, err := icalendar.ParseRRULE(newRRULE); err != nil {
 		return record("ignored-mismatch")
@@ -319,6 +338,37 @@ func thisAndFutureRecurrenceID(vevents []icalendar.Component) (icalendar.DateTim
 		}
 	}
 	return icalendar.DateTime{}, false, nil
+}
+
+func recurrenceBoundUTC(ev store.CalendarEvent) (*time.Time, error) {
+	r, err := icalendar.ParseRRULE(ev.RRULE)
+	if err != nil {
+		return nil, err
+	}
+	if r.Until != nil {
+		t := r.Until.UTC()
+		return &t, nil
+	}
+	if r.Count == 0 {
+		return nil, nil
+	}
+	start := icalendar.DateTime{UTC: ev.StartUTC, TZID: ev.TZID, DateOnly: ev.DateOnly, Floating: ev.Floating}
+	exdates, err := parseDateValues("EXDATE", ev.EXDATE)
+	if err != nil {
+		return nil, err
+	}
+	from := ev.StartUTC
+	to := from.AddDate(0, 0, Limits().ExpansionHorizonDays)
+	inst, err := icalendar.Expand(start, r, nil, exdates, from, to, Limits().MaxRecurrenceInstances)
+	if err != nil {
+		return nil, err
+	}
+	if len(inst) == 0 {
+		t := ev.StartUTC
+		return &t, nil
+	}
+	last := inst[len(inst)-1].UTC
+	return &last, nil
 }
 
 func rruleWithUntil(rrule, until string) string {
