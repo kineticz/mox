@@ -3,7 +3,7 @@ package config
 // CalendarFile is the parsed form of calendar.conf.
 type CalendarFile struct {
 	EnableCalendar  bool `sconf:"optional" sconf-doc:"Enable the server-side calendar store, calendar JSON API and default per-account calendar. Default: false."`
-	EnableCalDAV    bool `sconf:"optional" sconf-doc:"Enable CalDAV. Requires EnableCalendar. Default: false. Unused in phase 1."`
+	EnableCalDAV    bool `sconf:"optional" sconf-doc:"Enable CalDAV. Requires EnableCalendar. Default: false."`
 	EnableIMIP      bool `sconf:"optional" sconf-doc:"Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false. Unused in phase 1."`
 	EnableScheduled bool `sconf:"optional" sconf-doc:"Enable the ScheduledMessage service and virtual IMAP Scheduled mailbox. Default: false. Unused in phase 1."`
 

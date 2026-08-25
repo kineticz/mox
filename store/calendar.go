@@ -14,6 +14,7 @@ type Calendar struct {
 	ID   int64
 	Name string `bstore:"nonzero"`
 	UID  string `bstore:"nonzero,unique"`
+	CTag int64
 }
 
 type CalendarAttendee struct {

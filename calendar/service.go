@@ -114,7 +114,7 @@ func (Service) Create(ctx context.Context, acc *store.Account, in EventInput) (e
 			if err := tx.Insert(&ev); err != nil {
 				return err
 			}
-			return nil
+			return bumpCalendarCTag(tx, acc)
 		})
 	})
 	return ev, rerr
@@ -184,7 +184,7 @@ func (Service) Update(ctx context.Context, acc *store.Account, id int64, in Even
 				return err
 			}
 			ev = updated
-			return nil
+			return bumpCalendarCTag(tx, acc)
 		})
 	})
 	return ev, rerr
@@ -241,7 +241,7 @@ func (Service) Respond(ctx context.Context, acc *store.Account, id int64, revisi
 				return err
 			}
 			ev = updated
-			return nil
+			return bumpCalendarCTag(tx, acc)
 		})
 	})
 	return ev, rerr
@@ -268,9 +268,15 @@ func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revisio
 			}
 			if wholeSeries || ev.RecurrenceID == "" {
 				_, err := bstore.QueryTx[store.CalendarEvent](tx).FilterNonzero(store.CalendarEvent{UID: ev.UID}).Delete()
+				if err != nil {
+					return err
+				}
+				return bumpCalendarCTag(tx, acc)
+			}
+			if err := tx.Delete(&ev); err != nil {
 				return err
 			}
-			return tx.Delete(&ev)
+			return bumpCalendarCTag(tx, acc)
 		})
 	})
 	return rerr
@@ -595,4 +601,13 @@ func eventError(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+func bumpCalendarCTag(tx *bstore.Tx, acc *store.Account) error {
+	c, err := acc.DefaultCalendar(tx)
+	if err != nil {
+		return err
+	}
+	c.CTag++
+	return tx.Update(&c)
 }

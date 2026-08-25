@@ -75,6 +75,23 @@ func TestDescribeCalendarDoesNotAffectStatic(t *testing.T) {
 	}
 }
 
+func TestCalDAVEnabledRequiresBothFlags(t *testing.T) {
+	orig := Conf.Calendar
+	t.Cleanup(func() { Conf.Calendar = orig })
+	Conf.Calendar = config.CalendarFile{}
+	if CalDAVEnabled() {
+		t.Fatal("disabled")
+	}
+	Conf.Calendar.EnableCalDAV = true
+	if CalDAVEnabled() {
+		t.Fatal("caldav without calendar")
+	}
+	Conf.Calendar.EnableCalendar = true
+	if !CalDAVEnabled() {
+		t.Fatal("both true")
+	}
+}
+
 func TestParseConfigWithoutCalendarFileUnchanged(t *testing.T) {
 	log := mlog.New("test", nil)
 	c, errs := ParseConfig(context.Background(), log, filepath.FromSlash("../testdata/store/mox.conf"), true, false, false)

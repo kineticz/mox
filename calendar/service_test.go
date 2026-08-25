@@ -54,6 +54,38 @@ func testTimes() (icalendar.DateTime, icalendar.DateTime) {
 		icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
 }
 
+func TestMutationsBumpCalendarCTag(t *testing.T) {
+	acc := testAccount(t)
+	start, end := testTimes()
+	svc := Service{}
+	ctag := func() int64 {
+		var n int64
+		acc.DB.Read(testctx, func(tx *bstore.Tx) error {
+			c, err := acc.DefaultCalendar(tx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n = c.CTag
+			return nil
+		})
+		return n
+	}
+	if ctag() != 0 {
+		t.Fatalf("initial ctag %d", ctag())
+	}
+	ev, err := svc.Create(testctx, acc, EventInput{Summary: "A", Start: start, End: end})
+	if err != nil || ctag() != 1 {
+		t.Fatalf("create ctag=%d err=%v", ctag(), err)
+	}
+	_, err = svc.Update(testctx, acc, ev.ID, EventInput{UID: ev.UID, Revision: ev.Revision, Summary: "B", Start: start, End: end})
+	if err != nil || ctag() != 2 {
+		t.Fatalf("update ctag=%d err=%v", ctag(), err)
+	}
+	if err := svc.Delete(testctx, acc, ev.ID, ev.Revision+1, true); err != nil || ctag() != 3 {
+		t.Fatalf("delete ctag=%d err=%v", ctag(), err)
+	}
+}
+
 func TestCreateGetUpdateStaleDelete(t *testing.T) {
 	acc := testAccount(t)
 	start, end := testTimes()

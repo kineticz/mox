@@ -57,3 +57,7 @@ func ValidateCalendarFile(c config.CalendarFile) error {
 func CalendarEnabled() bool {
 	return Conf.Calendar.EnableCalendar
 }
+
+func CalDAVEnabled() bool {
+	return Conf.Calendar.EnableCalendar && Conf.Calendar.EnableCalDAV
+}
