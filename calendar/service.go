@@ -263,6 +263,11 @@ func calendarAddressMatch(a, b string) bool {
 	return a == b
 }
 
+// AddressMatch reports whether two calendar addresses refer to the same mailbox.
+func AddressMatch(a, b string) bool {
+	return calendarAddressMatch(a, b)
+}
+
 func (Service) Delete(ctx context.Context, acc *store.Account, id int64, revision int64, wholeSeries bool) (rerr error) {
 	if !mox.CalendarEnabled() {
 		return ErrNotEnabled
