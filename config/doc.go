@@ -1542,7 +1542,7 @@ See https://pkg.go.dev/github.com/mjl-/sconf for details.
 	EnableCalDAV: false
 
 	# Enable iTIP/iMIP scheduling over email. Requires EnableCalendar. Default: false.
-	# Unused in phase 1. (optional)
+	# (optional)
 	EnableIMIP: false
 
 	# Enable the ScheduledMessage service and virtual IMAP Scheduled mailbox. Default:

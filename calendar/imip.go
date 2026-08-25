@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mjl-/bstore"
 
@@ -216,6 +217,12 @@ func applyCancel(ctx context.Context, acc *store.Account, vevents []icalendar.Co
 	if seq < maxSequence(existing) {
 		return record("ignored-stale")
 	}
+	if rid, ok, err := thisAndFutureRecurrenceID(vevents); err != nil {
+		return record("ignored-mismatch")
+	} else if ok {
+		// ../rfc/5546:3.2.5 RANGE=THISANDFUTURE cancels the identified instance and later
+		return applyThisAndFutureCancel(ctx, acc, existing, seq, rid, record)
+	}
 	err = deleteObject(ctx, acc, uid, "", false)
 	if applyUserError(err) {
 		return record("ignored-mismatch")
@@ -224,6 +231,111 @@ func applyCancel(ctx context.Context, acc *store.Account, vevents []icalendar.Co
 		return "", err
 	}
 	return record("applied")
+}
+
+func applyThisAndFutureCancel(ctx context.Context, acc *store.Account, existing []store.CalendarEvent, seq int, rid icalendar.DateTime, record func(string) (string, error)) (string, error) {
+	var master *store.CalendarEvent
+	for i := range existing {
+		if existing[i].RecurrenceID == "" {
+			master = &existing[i]
+			break
+		}
+	}
+	if master == nil || master.RRULE == "" {
+		return record("ignored-mismatch")
+	}
+
+	until := rid.UTC.Add(-time.Second).UTC().Format("20060102T150405Z")
+	newRRULE := rruleWithUntil(master.RRULE, until)
+	if _, err := icalendar.ParseRRULE(newRRULE); err != nil {
+		return record("ignored-mismatch")
+	}
+
+	newSeq := seq
+	if stored := maxSequence(existing); newSeq <= stored {
+		newSeq = stored + 1
+	}
+
+	updated := *master
+	updated.RRULE = newRRULE
+	updated.Sequence = newSeq
+	updated.Revision = master.Revision + 1
+	updated.LastModified = time.Now().UTC()
+	ics, err := serializeEvent(updated, unknownProperties(master.ICS), nestedComponents(master.ICS))
+	if err != nil {
+		if applyUserError(err) {
+			return record("ignored-mismatch")
+		}
+		return "", err
+	}
+	if len(ics) > Limits().MaxICSBytes {
+		return record("ignored-mismatch")
+	}
+	updated.ICS = ics
+
+	var drop []store.CalendarEvent
+	for _, ev := range existing {
+		if ev.RecurrenceID == "" {
+			continue
+		}
+		exRID, err := parseRecurrenceID(ev.RecurrenceID, master.TZID)
+		if err != nil || !exRID.UTC.Before(rid.UTC) {
+			drop = append(drop, ev)
+		}
+	}
+
+	var writeErr error
+	acc.WithWLock(func() {
+		writeErr = acc.DB.Write(ctx, func(tx *bstore.Tx) error {
+			if err := tx.Update(&updated); err != nil {
+				return err
+			}
+			for i := range drop {
+				if err := tx.Delete(&drop[i]); err != nil {
+					return err
+				}
+			}
+			return bumpCalendarCTag(tx, acc)
+		})
+	})
+	if applyUserError(writeErr) {
+		return record("ignored-mismatch")
+	}
+	if writeErr != nil {
+		return "", writeErr
+	}
+	return record("applied")
+}
+
+func thisAndFutureRecurrenceID(vevents []icalendar.Component) (icalendar.DateTime, bool, error) {
+	for _, c := range vevents {
+		p, ok := c.Prop("RECURRENCE-ID")
+		if !ok {
+			continue
+		}
+		if v, ok := p.Param("RANGE"); ok && strings.EqualFold(v, "THISANDFUTURE") {
+			d, err := icalendar.ParseDateTime(p)
+			return d, true, err
+		}
+	}
+	return icalendar.DateTime{}, false, nil
+}
+
+func rruleWithUntil(rrule, until string) string {
+	var parts []string
+	for _, field := range strings.Split(rrule, ";") {
+		key, _, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToUpper(key) {
+		case "COUNT", "UNTIL":
+			continue
+		}
+		parts = append(parts, field)
+	}
+	parts = append(parts, "UNTIL="+until)
+	return strings.Join(parts, ";")
 }
 
 func applyUserError(err error) bool {

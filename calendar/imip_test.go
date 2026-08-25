@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mjl-/bstore"
 
@@ -523,6 +525,121 @@ func TestApplyIncomingEmptyOrganizerEmptyMailFrom(t *testing.T) {
 	inboundHas(t, acc, "CANCEL", "imip-empty-cancel@mox", 1, "ignored-mismatch")
 	if _, err := svc.GetObject(testctx, acc, "imip-empty-cancel@mox"); err != nil {
 		t.Fatalf("empty ORGANIZER CANCEL deleted object: %v", err)
+	}
+}
+
+func TestApplyIncomingThisAndFutureCancel(t *testing.T) {
+	acc := testAccount(t)
+	enableIMIP(t)
+	svc := Service{}
+	start := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)}
+	end := icalendar.DateTime{UTC: time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)}
+	master, err := svc.Create(testctx, acc, EventInput{
+		UID:       "imip-taf-cancel@mox",
+		Summary:   "Series",
+		Organizer: "mailto:org@mox.example",
+		Start:     start,
+		End:       end,
+		RRULE:     "FREQ=DAILY;COUNT=5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(testctx, acc, EventInput{
+		UID:          master.UID,
+		RecurrenceID: "20260816T090000Z",
+		Summary:      "Earlier exception",
+		Organizer:    "mailto:org@mox.example",
+		Start:        icalendar.DateTime{UTC: time.Date(2026, 8, 16, 11, 0, 0, 0, time.UTC)},
+		End:          icalendar.DateTime{UTC: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(testctx, acc, EventInput{
+		UID:          master.UID,
+		RecurrenceID: "20260818T090000Z",
+		Summary:      "Later exception",
+		Organizer:    "mailto:org@mox.example",
+		Start:        icalendar.DateTime{UTC: time.Date(2026, 8, 18, 11, 0, 0, 0, time.UTC)},
+		End:          icalendar.DateTime{UTC: time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeOutbox := len(outboxRows(t, acc))
+
+	cancel := parseCal(t, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:imip-taf-cancel@mox\r\nSEQUENCE:0\r\nDTSTART:20260817T090000Z\r\nDTEND:20260817T100000Z\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20260817T090000Z\r\nORGANIZER:mailto:org@mox.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	result, err := ApplyIncoming(testctx, acc, cancel, IncomingMeta{MailFrom: "org@mox.example"})
+	if err != nil || result != "applied" {
+		t.Fatalf("THISANDFUTURE CANCEL: result=%q err=%v", result, err)
+	}
+	inboundHas(t, acc, "CANCEL", "imip-taf-cancel@mox", 0, "applied")
+	if n := len(outboxRows(t, acc)); n != beforeOutbox {
+		t.Fatalf("THISANDFUTURE CANCEL enqueued outbox: before=%d after=%d", beforeOutbox, n)
+	}
+
+	var got store.CalendarEvent
+	var keptException bool
+	err = acc.DB.Read(testctx, func(tx *bstore.Tx) error {
+		events, err := eventsByUID(tx, master.UID)
+		if err != nil {
+			return err
+		}
+		for _, ev := range events {
+			switch ev.RecurrenceID {
+			case "":
+				got = ev
+			case "20260816T090000Z":
+				keptException = true
+			default:
+				t.Errorf("kept exception Recurrence-ID %q", ev.RecurrenceID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keptException {
+		t.Fatal("dropped exception before Recurrence-ID")
+	}
+	if got.Sequence != master.Sequence+1 {
+		t.Fatalf("THISANDFUTURE CANCEL sequence=%d, want %d", got.Sequence, master.Sequence+1)
+	}
+	if !strings.Contains(got.RRULE, "UNTIL=20260817T085959Z") {
+		t.Fatalf("THISANDFUTURE CANCEL RRULE %q, want UNTIL=20260817T085959Z", got.RRULE)
+	}
+	if strings.Contains(got.RRULE, "COUNT=") {
+		t.Fatalf("THISANDFUTURE CANCEL left COUNT in RRULE %q", got.RRULE)
+	}
+
+	day := func(d int) (time.Time, time.Time) {
+		from := time.Date(2026, 8, d, 0, 0, 0, 0, time.UTC)
+		return from, from.AddDate(0, 0, 1)
+	}
+	queryDay := func(d int) []Instance {
+		t.Helper()
+		from, to := day(d)
+		inst, err := svc.Query(testctx, acc, from, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inst
+	}
+
+	early := queryDay(16)
+	if len(early) != 1 || !early[0].Start.UTC.Equal(time.Date(2026, 8, 16, 11, 0, 0, 0, time.UTC)) || !early[0].Exception {
+		t.Fatalf("earlier instance: %#v", early)
+	}
+	if inst := queryDay(17); len(inst) != 0 {
+		t.Fatalf("Recurrence-ID instant still queryable: %#v", inst)
+	}
+	if inst := queryDay(18); len(inst) != 0 {
+		t.Fatalf("later instance still queryable: %#v", inst)
+	}
+	if inst := queryDay(15); len(inst) != 1 || !inst[0].Start.UTC.Equal(start.UTC) {
+		t.Fatalf("first instance: %#v", inst)
 	}
 }
 
