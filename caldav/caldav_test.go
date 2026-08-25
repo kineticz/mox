@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,5 +252,92 @@ func TestWellKnownMethodNotAllowed(t *testing.T) {
 	WellKnown(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+func objectReq(t *testing.T, method, path, body string, hdr http.Header) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.SetBasicAuth("mjl@mox.example", "test1234")
+	for k, vv := range hdr {
+		for _, v := range vv {
+			req.Header.Add(k, v)
+		}
+	}
+	Handler(false).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPutGetDeleteObject(t *testing.T) {
+	setupCalDAV(t, true, true)
+
+	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:obj1@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Hello\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	path := "/mjl/calendars/default/" + url.PathEscape("obj1@mox") + ".ics"
+
+	putHdr := http.Header{}
+	putHdr.Set("Content-Type", "text/calendar")
+	rec := objectReq(t, http.MethodPut, path, ics, putHdr)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("put got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	rec = objectReq(t, http.MethodGet, path, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get got %d body %q", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/calendar; charset=utf-8" {
+		t.Fatalf("Content-Type %q", ct)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag")
+	}
+	if !strings.Contains(rec.Body.String(), "BEGIN:VEVENT") || !strings.Contains(rec.Body.String(), "UID:obj1@mox") {
+		t.Fatalf("body %q", rec.Body.String())
+	}
+
+	head := objectReq(t, http.MethodHead, path, "", nil)
+	if head.Code != http.StatusOK {
+		t.Fatalf("head got %d", head.Code)
+	}
+	if head.Header().Get("ETag") != etag {
+		t.Fatalf("head ETag %q", head.Header().Get("ETag"))
+	}
+	if head.Body.Len() != 0 {
+		t.Fatalf("head body %q", head.Body.String())
+	}
+
+	staleHdr := http.Header{}
+	staleHdr.Set("Content-Type", "text/calendar")
+	staleHdr.Set("If-Match", `"rev-999"`)
+	rec = objectReq(t, http.MethodPut, path, ics, staleHdr)
+	if rec.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale put got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	delHdr := http.Header{}
+	delHdr.Set("If-Match", etag)
+	rec = objectReq(t, http.MethodDelete, path, "", delHdr)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	rec = objectReq(t, http.MethodGet, path, "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete got %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPutGetDeleteObjectUIDMismatch(t *testing.T) {
+	setupCalDAV(t, true, true)
+
+	ics := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:other@mox\r\nDTSTART:20260815T090000Z\r\nDTEND:20260815T100000Z\r\nSUMMARY:Hello\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	path := "/mjl/calendars/default/" + url.PathEscape("obj1@mox") + ".ics"
+	hdr := http.Header{}
+	hdr.Set("Content-Type", "text/calendar")
+	rec := objectReq(t, http.MethodPut, path, ics, hdr)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("uid mismatch put got %d body %q", rec.Code, rec.Body.String())
 	}
 }

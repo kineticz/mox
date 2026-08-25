@@ -99,6 +99,10 @@ func (h handler) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		h.serveGet(w, r, res)
+	case http.MethodPut:
+		h.servePut(w, r, res)
+	case http.MethodDelete:
+		h.serveDelete(w, r, res)
 	case "PROPFIND":
 		h.propfind(w, r, acc, res)
 	default:
@@ -111,6 +115,8 @@ func (h handler) serveGet(w http.ResponseWriter, r *http.Request, res resource) 
 	case resRoot, resPrincipal, resCalendarHome, resCalendar:
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
+	case resObject:
+		h.serveObjectGet(w, r, res)
 	default:
 		http.NotFound(w, r)
 	}
