@@ -79,7 +79,8 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handler) serve(w http.ResponseWriter, r *http.Request) {
-	if accountFrom(r) == nil {
+	acc := accountFrom(r)
+	if acc == nil {
 		http.Error(w, "500 - internal server error - missing account", http.StatusInternalServerError)
 		return
 	}
@@ -89,17 +90,30 @@ func (h handler) serve(w http.ResponseWriter, r *http.Request) {
 		path = "/"
 	}
 
-	// Temporary authenticated root response until PROPFIND routing is added.
-	if path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		if r.Method != http.MethodHead {
-			w.Write([]byte("caldav"))
-		}
+	res := parseResource(path)
+	if res.account != "" && res.account != acc.Name {
+		http.Error(w, "403 - forbidden", http.StatusForbidden)
 		return
 	}
 
-	http.NotFound(w, r)
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.serveGet(w, r, res)
+	case "PROPFIND":
+		h.propfind(w, r, acc, res)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h handler) serveGet(w http.ResponseWriter, r *http.Request, res resource) {
+	switch res.kind {
+	case resRoot, resPrincipal, resCalendarHome, resCalendar:
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func (h handler) authenticate(log mlog.Log, w http.ResponseWriter, r *http.Request) (*store.Account, bool) {

@@ -134,7 +134,89 @@ func TestGetAuthenticated(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Fatalf("Content-Type %q", ct)
 	}
-	if rec.Body.String() != "caldav" {
+	if rec.Body.String() != "" {
+		t.Fatalf("body %q", rec.Body.String())
+	}
+}
+
+func propfind(t *testing.T, path, depth, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("PROPFIND", path, strings.NewReader(body))
+	req.SetBasicAuth("mjl@mox.example", "test1234")
+	req.Header.Set("Depth", depth)
+	req.Header.Set("Content-Type", "application/xml")
+	Handler(false).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPROPFINDCurrentUserPrincipal(t *testing.T) {
+	setupCalDAV(t, true, true)
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:current-user-principal/>
+  </D:prop>
+</D:propfind>`
+	rec := propfind(t, "/", "0", body)
+	if rec.Code != 207 {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/xml") {
+		t.Fatalf("Content-Type %q", rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), "/caldav/mjl/") {
+		t.Fatalf("body %q", rec.Body.String())
+	}
+}
+
+func TestPROPFINDCalendarCollection(t *testing.T) {
+	setupCalDAV(t, true, true)
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/">
+  <D:prop>
+    <CS:getctag/>
+    <D:resourcetype/>
+  </D:prop>
+</D:propfind>`
+	rec := propfind(t, "/mjl/calendars/default/", "0", body)
+	if rec.Code != 207 {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+	got := rec.Body.String()
+	if !strings.Contains(got, "resourcetype") {
+		t.Fatalf("missing resourcetype: %q", got)
+	}
+	// CalDAV calendar element in resourcetype, not the "calendars" path segment.
+	if !strings.Contains(got, ":calendar") && !strings.Contains(got, "<calendar") {
+		t.Fatalf("missing calendar resourcetype: %q", got)
+	}
+	if !strings.Contains(got, "getctag") {
+		t.Fatalf("missing getctag: %q", got)
+	}
+}
+
+func TestPROPFINDOtherAccountForbidden(t *testing.T) {
+	setupCalDAV(t, true, true)
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:resourcetype/>
+  </D:prop>
+</D:propfind>`
+	rec := propfind(t, "/otheruser/", "0", body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPROPFINDCalendarHomeDepth1(t *testing.T) {
+	setupCalDAV(t, true, true)
+	rec := propfind(t, "/mjl/calendars/", "1", "")
+	if rec.Code != 207 {
+		t.Fatalf("got %d body %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "/caldav/mjl/calendars/default/") {
 		t.Fatalf("body %q", rec.Body.String())
 	}
 }
