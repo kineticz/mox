@@ -350,18 +350,18 @@ func TestEnqueueOutboxSkipsOrganizerAttendee(t *testing.T) {
 	}
 }
 
-func TestFlushOutboxNoop(t *testing.T) {
+func TestFlushOutboxQueueNotInitialized(t *testing.T) {
 	acc := testAccount(t)
 	enableIMIP(t)
 	if _, err := (Service{}).Create(testctx, acc, inviteInput("outbox-flush@mox", "mailto:org@mox.example", "mailto:att@example.com")); err != nil {
 		t.Fatal(err)
 	}
-	if err := FlushOutbox(testctx, mlog.New("calendar", nil), acc); err != nil {
-		t.Fatalf("FlushOutbox: %v", err)
+	if err := FlushOutbox(testctx, mlog.New("calendar", nil), acc); err == nil {
+		t.Fatal("FlushOutbox: want error when queue is not initialized")
 	}
 	rows := outboxByMethod(t, acc, "REQUEST")
 	if len(rows) != 1 || rows[0].Queued {
-		t.Fatalf("stub must leave Queued=false: %#v", rows)
+		t.Fatalf("queue not init must leave Queued=false: %#v", rows)
 	}
 }
 
